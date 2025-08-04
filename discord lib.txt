@@ -1690,10 +1690,12 @@ function DiscordLib:Window(text)
 		ServerIco.Position = UDim2.new(0.489361703, 0, 0.489361703, 0)
 		ServerIco.Size = UDim2.new(0, 26, 0, 26)
 		local function convertDecal(id)
-	if tostring(id):find("rbxassetid://") then
-		id = tostring(id):gsub("rbxassetid://", "")
+	if tostring(id):match("^rbxassetid://%d+$") then
+		local onlyId = tostring(id):gsub("rbxassetid://", "")
+		return "https://www.roblox.com/asset-thumbnail/image?assetId=" .. onlyId .. "&width=420&height=420&format=png"
+	else
+		return id -- ما يلمس الرابط إذا كان صورة عادية
 	end
-	return "https://www.roblox.com/asset-thumbnail/image?assetId=" .. id .. "&width=420&height=420&format=png"
 end
 
 ServerIco.Image = convertDecal(img)
@@ -3346,6 +3348,7 @@ end
 
 
 return DiscordLib
+
 
 
 
