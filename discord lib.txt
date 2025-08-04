@@ -3290,7 +3290,7 @@ if success and gui then
 	toggleBtn.AutoButtonColor = true
 	toggleBtn.Draggable = true
 	toggleBtn.ZIndex = 9999
-	toggleBtn.Image = "rbxassetid://6031068426" -- أيقونة الديسكورد
+	toggleBtn.Image = "rbxassetid://127124744565592" -- أيقونة الديسكورد
 	toggleBtn.ImageColor3 = Color3.new(1, 1, 1)
 	toggleBtn.ScaleType = Enum.ScaleType.Fit
 
@@ -3354,6 +3354,7 @@ end
 
 
 return DiscordLib
+
 
 
 
