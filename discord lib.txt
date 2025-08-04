@@ -3250,6 +3250,8 @@ end
 
 
 
+
+
 -- زر عائم لإخفاء/إظهار الواجهة
 local success, gui = pcall(function()
 	return game:GetService("CoreGui"):FindFirstChild("Discord") or game.Players.LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("Discord")
@@ -3338,6 +3340,7 @@ end
 
 
 return DiscordLib
+
 
 
 
