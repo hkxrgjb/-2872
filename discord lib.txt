@@ -1690,25 +1690,20 @@ function DiscordLib:Window(text)
 		ServerIco.Position = UDim2.new(0.489361703, 0, 0.489361703, 0)
 		ServerIco.Size = UDim2.new(0, 26, 0, 26)
 		local function convertIcon(raw)
-    if not raw then
-        return ""
-    end
-    local str = tostring(raw)
-    -- إذا جا بصيغة rbxassetid://
-    local id = str:match("^rbxassetid://(%d+)$")
-         or str:match("^(%d+)$") -- أو حتى رقم فقط
+    local s = tostring(raw or "")
+    -- اذا كان rbxassetid://<ID> أو رقم فقط
+    local id = s:match("^rbxassetid://(%d%w*)$") or s:match("^(%d+)$")
     if id then
-        return string.format("rbxthumb://type=Asset&id=%s&w=150&h=150", id)
+        -- استخدم rbxthumb لعرض Decal و Image جميعا
+        return ("rbxthumb://type=Asset&id=%s&w=150&h=150"):format(id)
     end
-    -- لو الرابط مباشر (https://)
-    if str:match("^http") then
-        return str
+    -- لو الرابط https:// مباشر
+    if s:match("^https?://") then
+        return s
     end
-    -- وإلا نحتفظ بالقيمة كما هي
     return raw
 end
 
--- بعدها خلي هذا السطر:
 ServerIco.Image = convertIcon(img)
 		ServerWhiteFrame.Name = "ServerWhiteFrame"
 		ServerWhiteFrame.Parent = Server
@@ -3359,6 +3354,7 @@ end
 
 
 return DiscordLib
+
 
 
 
