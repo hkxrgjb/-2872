@@ -3246,8 +3246,10 @@ function DiscordLib:Window(text)
 end
 
 
--- إضافة الزر العائم في نهاية المكتبة
-local function CreateFloatingButton(mainFrame)
+
+
+-- إضافة الزر العائم - يوضع في نهاية المكتبة قبل return DiscordLib
+function DiscordLib:CreateFloatingButton()
     local isHidden = false
     
     -- إنشاء الزر العائم
@@ -3255,7 +3257,7 @@ local function CreateFloatingButton(mainFrame)
     local FloatingButtonCorner = Instance.new("UICorner")
     local FloatingButtonIcon = Instance.new("TextLabel")
     
-    FloatingButton.Name = "FloatingButton"
+    FloatingButton.Name = "DiscordFloatingButton"
     FloatingButton.Parent = game.CoreGui
     FloatingButton.BackgroundColor3 = Color3.fromRGB(114, 137, 228)
     FloatingButton.Position = UDim2.new(0, 20, 0, 100)
@@ -3277,7 +3279,7 @@ local function CreateFloatingButton(mainFrame)
     FloatingButtonIcon.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     FloatingButtonIcon.BackgroundTransparency = 1.000
     FloatingButtonIcon.Position = UDim2.new(0, 0, 0, 0)
-    FloatingButtonIcon.Size = UDim2.new(0, 50, 0, 50)
+    FloatingButtonIcon.Size = UDim2.new(1, 0, 1, 0)
     FloatingButtonIcon.Font = Enum.Font.GothamBold
     FloatingButtonIcon.Text = "☰"
     FloatingButtonIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -3285,38 +3287,48 @@ local function CreateFloatingButton(mainFrame)
     
     -- وظيفة التبديل بين الإخفاء والإظهار
     FloatingButton.MouseButton1Click:Connect(function()
-        if isHidden then
-            -- إظهار القائمة
-            mainFrame:TweenSize(
-                UDim2.new(0, 681, 0, 396),
-                Enum.EasingDirection.Out,
-                Enum.EasingStyle.Quart,
-                0.3,
-                true
-            )
-            TweenService:Create(
-                mainFrame,
-                TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                {BackgroundTransparency = 0}
-            ):Play()
-            FloatingButtonIcon.Text = "☰"
-            isHidden = false
-        else
-            -- إخفاء القائمة
-            mainFrame:TweenSize(
-                UDim2.new(0, 0, 0, 0),
-                Enum.EasingDirection.Out,
-                Enum.EasingStyle.Quart,
-                0.3,
-                true
-            )
-            TweenService:Create(
-                mainFrame,
-                TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                {BackgroundTransparency = 1}
-            ):Play()
-            FloatingButtonIcon.Text = "+"
-            isHidden = true
+        local mainFrame = game.CoreGui:FindFirstChild("Discord")
+        if mainFrame then
+            mainFrame = mainFrame:FindFirstChild("MainFrame")
+            if mainFrame then
+                if isHidden then
+                    -- إظهار القائمة
+                    mainFrame.Visible = true
+                    mainFrame:TweenSize(
+                        UDim2.new(0, 681, 0, 396),
+                        Enum.EasingDirection.Out,
+                        Enum.EasingStyle.Quart,
+                        0.3,
+                        true
+                    )
+                    TweenService:Create(
+                        mainFrame,
+                        TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                        {BackgroundTransparency = 0}
+                    ):Play()
+                    FloatingButtonIcon.Text = "☰"
+                    isHidden = false
+                else
+                    -- إخفاء القائمة
+                    mainFrame:TweenSize(
+                        UDim2.new(0, 0, 0, 0),
+                        Enum.EasingDirection.Out,
+                        Enum.EasingStyle.Quart,
+                        0.3,
+                        true,
+                        function()
+                            mainFrame.Visible = false
+                        end
+                    )
+                    TweenService:Create(
+                        mainFrame,
+                        TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                        {BackgroundTransparency = 1}
+                    ):Play()
+                    FloatingButtonIcon.Text = "+"
+                    isHidden = true
+                end
+            end
         end
     end)
     
@@ -3382,7 +3394,7 @@ local function CreateFloatingButton(mainFrame)
         end
     end)
     
-    game:GetService("UserInputService").InputChanged:Connect(function(input)
+    UserInputService.InputChanged:Connect(function(input)
         if input == dragInput and dragging then
             update(input)
         end
@@ -3391,15 +3403,18 @@ local function CreateFloatingButton(mainFrame)
     return FloatingButton
 end
 
--- تعديل دالة Window لإضافة الزر العائم
+-- تعديل دالة Window لإضافة الزر العائم تلقائياً
 local originalWindow = DiscordLib.Window
 DiscordLib.Window = function(self, text)
     local windowResult = originalWindow(self, text)
-    -- البحث عن MainFrame وإضافة الزر العائم
-    local mainFrame = game.CoreGui.Discord.MainFrame
-    CreateFloatingButton(mainFrame)
+    -- إضافة الزر العائم بعد إنشاء النافذة
+    spawn(function()
+        wait(0.1) -- انتظار قصير للتأكد من إنشاء النافذة
+        self:CreateFloatingButton()
+    end)
     return windowResult
 end
 
 return DiscordLib
+
 
