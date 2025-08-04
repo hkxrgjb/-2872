@@ -1689,16 +1689,27 @@ function DiscordLib:Window(text)
 		ServerIco.BackgroundTransparency = 1.000
 		ServerIco.Position = UDim2.new(0.489361703, 0, 0.489361703, 0)
 		ServerIco.Size = UDim2.new(0, 26, 0, 26)
-		local function convertDecal(id)
-	if tostring(id):match("^rbxassetid://%d+$") then
-		local onlyId = tostring(id):gsub("rbxassetid://", "")
-		return "https://www.roblox.com/asset-thumbnail/image?assetId=" .. onlyId .. "&width=420&height=420&format=png"
-	else
-		return id -- ما يلمس الرابط إذا كان صورة عادية
-	end
+		local function convertIcon(raw)
+    if not raw then
+        return ""
+    end
+    local str = tostring(raw)
+    -- إذا جا بصيغة rbxassetid://
+    local id = str:match("^rbxassetid://(%d+)$")
+         or str:match("^(%d+)$") -- أو حتى رقم فقط
+    if id then
+        return string.format("rbxthumb://type=Asset&id=%s&w=150&h=150", id)
+    end
+    -- لو الرابط مباشر (https://)
+    if str:match("^http") then
+        return str
+    end
+    -- وإلا نحتفظ بالقيمة كما هي
+    return raw
 end
 
-ServerIco.Image = convertDecal(img)
+-- بعدها خلي هذا السطر:
+ServerIco.Image = convertIcon(img)
 		ServerWhiteFrame.Name = "ServerWhiteFrame"
 		ServerWhiteFrame.Parent = Server
 		ServerWhiteFrame.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -3348,6 +3359,7 @@ end
 
 
 return DiscordLib
+
 
 
 
