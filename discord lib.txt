@@ -1689,8 +1689,14 @@ function DiscordLib:Window(text)
 		ServerIco.BackgroundTransparency = 1.000
 		ServerIco.Position = UDim2.new(0.489361703, 0, 0.489361703, 0)
 		ServerIco.Size = UDim2.new(0, 26, 0, 26)
-		ServerIco.Image = ""
+		local function convertDecal(id)
+	if tostring(id):find("rbxassetid://") then
+		id = tostring(id):gsub("rbxassetid://", "")
+	end
+	return "https://www.roblox.com/asset-thumbnail/image?assetId=" .. id .. "&width=420&height=420&format=png"
+end
 
+ServerIco.Image = convertDecal(img)
 		ServerWhiteFrame.Name = "ServerWhiteFrame"
 		ServerWhiteFrame.Parent = Server
 		ServerWhiteFrame.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -3340,6 +3346,7 @@ end
 
 
 return DiscordLib
+
 
 
 
