@@ -1,0 +1,1773 @@
+--[[
+    ORBITAL RING v4.2 - Network Physics System
+    ============================================
+
+    ============================================
+]]
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local Workspace        = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+
+local CFG = {
+    Height        = 7,
+    Radius        = 5.5,
+    Speed         = 1.2,
+    MaxParts      = 100,
+    TiltX         = 30,
+    TiltZ         = 0,
+    FilterEnabled = false,
+    FilterTol     = 1.0,
+}
+
+-- ─────────────────────────
+local Folder       = Instance.new("Folder", Workspace)
+local AnchorPart   = Instance.new("Part", Folder)
+local Attachment1  = Instance.new("Attachment", AnchorPart)
+AnchorPart.Anchored     = true
+AnchorPart.CanCollide   = false
+AnchorPart.Transparency = 1
+AnchorPart.Size         = Vector3.new(0.1, 0.1, 0.1)
+
+if not getgenv().OrbitalNetwork then
+    getgenv().OrbitalNetwork = {
+        BaseParts = {},
+        Velocity  = Vector3.new(14.46262424, 14.46262424, 14.46262424)
+    }
+
+    getgenv().OrbitalNetwork.RetainPart = function(part)
+        if part:IsA("BasePart") and part:IsDescendantOf(Workspace) then
+            table.insert(getgenv().OrbitalNetwork.BaseParts, part)
+            part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+            part.CanCollide = false
+        end
+    end
+
+    local function EnablePartControl()
+        LocalPlayer.ReplicationFocus = Workspace
+        RunService.Heartbeat:Connect(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+            for _, part in pairs(getgenv().OrbitalNetwork.BaseParts) do
+                if part:IsDescendantOf(Workspace) then
+                    part.Velocity = getgenv().OrbitalNetwork.Velocity
+                end
+            end
+        end)
+    end
+
+    EnablePartControl()
+end
+
+-- ────────────────────────────────────────────────────────────────
+
+local RingActive    = false
+local OrbitalParts  = {}
+local HeartbeatConn = nil
+local DescConn      = nil
+local CurrentAngle  = 0
+local AlreadySeen   = {}
+
+-- ── ميزة الاستهداف ──────────────────────────────────────────────
+local TargetPlayer = nil
+
+local function GetTargetHeadPos()
+    local plr = TargetPlayer or LocalPlayer
+    if not plr then return nil end
+    local char = plr.Character
+    if not char then return nil end
+    local head = char:FindFirstChild("Head")
+    if not head then return nil end
+    return head.Position
+end
+
+local function GetTargetRootPart()
+    local plr = TargetPlayer or LocalPlayer
+    if not plr then return nil end
+    local char = plr.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ────────────────────────────────────────────────────────────────
+
+local function IsPhysicsPart(obj)
+    if not obj:IsA("BasePart") then return false end
+    if obj.Anchored then return false end
+    if obj.Massless then return false end
+    if obj == AnchorPart then return false end
+    if obj.Name == "Handle" then return false end
+    if obj.Parent and obj.Parent:IsA("Tool") then return false end
+    if obj.Size.X * obj.Size.Y * obj.Size.Z < 0.005 then return false end
+
+    local rootOk, rootAnchored = pcall(function() return obj:GetRootPart().Anchored end)
+    if rootOk and rootAnchored then return false end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character then
+            if obj:IsDescendantOf(plr.Character) then return false end
+            -- استبعاد أي part متصلة بجسم لاعب
+            if obj.Parent:FindFirstChildOfClass("Humanoid") then return false end
+            if obj.Parent:FindFirstChild("Head") then return false end
+        end
+    end
+    return true
+end
+
+local function SizesMatch(s1, s2, tol)
+    return math.abs(s1.X - s2.X) <= tol
+       and math.abs(s1.Y - s2.Y) <= tol
+       and math.abs(s1.Z - s2.Z) <= tol
+end
+
+local function GetFilteredParts()
+    local candidates = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if IsPhysicsPart(obj) then
+            table.insert(candidates, obj)
+        end
+    end
+    if not CFG.FilterEnabled or #candidates == 0 then return candidates end
+    local groups = {}
+    for _, part in ipairs(candidates) do
+        local matched = false
+        for _, group in ipairs(groups) do
+            if SizesMatch(part.Size, group.refSize, CFG.FilterTol) then
+                table.insert(group.parts, part) matched = true break
+            end
+        end
+        if not matched then
+--[[
+    ORBITAL RING v4.2 - Network Physics System
+    ============================================
+    نظام الفيزياء: مبني على SimulationRadius + AlignPosition
+    مرئي للجميع على السيرفر
+    ============================================
+]]
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local Workspace        = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+
+local CFG = {
+    Height        = 7,
+    Radius        = 5.5,
+    Speed         = 1.2,
+    MaxParts      = 100,
+    TiltX         = 30,
+    TiltZ         = 0,
+    FilterEnabled = false,
+    FilterTol     = 1.0,
+}
+
+
+local Folder       = Instance.new("Folder", Workspace)
+local AnchorPart   = Instance.new("Part", Folder)
+local Attachment1  = Instance.new("Attachment", AnchorPart)
+AnchorPart.Anchored     = true
+AnchorPart.CanCollide   = false
+AnchorPart.Transparency = 1
+AnchorPart.Size         = Vector3.new(0.1, 0.1, 0.1)
+
+if not getgenv().OrbitalNetwork then
+    getgenv().OrbitalNetwork = {
+        BaseParts = {},
+        Velocity  = Vector3.new(14.46262424, 14.46262424, 14.46262424)
+    }
+
+    getgenv().OrbitalNetwork.RetainPart = function(part)
+        if part:IsA("BasePart") and part:IsDescendantOf(Workspace) then
+            table.insert(getgenv().OrbitalNetwork.BaseParts, part)
+            part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+            part.CanCollide = false
+        end
+    end
+
+    local function EnablePartControl()
+        LocalPlayer.ReplicationFocus = Workspace
+        RunService.Heartbeat:Connect(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+            for _, part in pairs(getgenv().OrbitalNetwork.BaseParts) do
+                if part:IsDescendantOf(Workspace) then
+                    part.Velocity = getgenv().OrbitalNetwork.Velocity
+                end
+            end
+        end)
+    end
+
+    EnablePartControl()
+end
+
+-- ────────────────────────────────────────────────────────────────
+
+local RingActive    = false
+local OrbitalParts  = {}
+local HeartbeatConn = nil
+local DescConn      = nil
+local CurrentAngle  = 0
+local AlreadySeen   = {}
+
+-- ── ميزة الاستهداف ──────────────────────────────────────────────
+local TargetPlayer = nil
+
+local function GetTargetHeadPos()
+    local plr = TargetPlayer or LocalPlayer
+    if not plr then return nil end
+    local char = plr.Character
+    if not char then return nil end
+    local head = char:FindFirstChild("Head")
+    if not head then return nil end
+    return head.Position
+end
+
+local function GetTargetRootPart()
+    local plr = TargetPlayer or LocalPlayer
+    if not plr then return nil end
+    local char = plr.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ────────────────────────────────────────────────────────────────
+
+local function IsPhysicsPart(obj)
+    if not obj:IsA("BasePart") then return false end
+    if obj.Anchored then return false end
+    if obj.Massless then return false end
+    if obj == AnchorPart then return false end
+    if obj.Name == "Handle" then return false end
+    if obj.Parent and obj.Parent:IsA("Tool") then return false end
+    if obj.Size.X * obj.Size.Y * obj.Size.Z < 0.005 then return false end
+
+    local rootOk, rootAnchored = pcall(function() return obj:GetRootPart().Anchored end)
+    if rootOk and rootAnchored then return false end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character then
+            if obj:IsDescendantOf(plr.Character) then return false end
+            -- استبعاد أي part متصلة بجسم لاعب
+            if obj.Parent:FindFirstChildOfClass("Humanoid") then return false end
+            if obj.Parent:FindFirstChild("Head") then return false end
+        end
+    end
+    return true
+end
+
+local function SizesMatch(s1, s2, tol)
+    return math.abs(s1.X - s2.X) <= tol
+       and math.abs(s1.Y - s2.Y) <= tol
+       and math.abs(s1.Z - s2.Z) <= tol
+end
+
+local function GetFilteredParts()
+    local candidates = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if IsPhysicsPart(obj) then
+            table.insert(candidates, obj)
+        end
+    end
+    if not CFG.FilterEnabled or #candidates == 0 then return candidates end
+    local groups = {}
+    for _, part in ipairs(candidates) do
+        local matched = false
+        for _, group in ipairs(groups) do
+            if SizesMatch(part.Size, group.refSize, CFG.FilterTol) then
+                table.insert(group.parts, part) matched = true break
+            end
+        end
+        if not matched then
+            table.insert(groups, {refSize = part.Size, parts = {part}})
+        end
+    end
+    local best = {}
+    for _, group in ipairs(groups) do
+        if #group.parts > #best then best = group.parts end
+    end
+    return #best > 0 and best or candidates
+end
+
+local function GetRingPosition(index, total, centerPos)
+    local angle  = CurrentAngle + (index / total) * (2 * math.pi)
+    local local3 = Vector3.new(CFG.Radius * math.cos(angle), 0, CFG.Radius * math.sin(angle))
+    local tiltCF = CFrame.Angles(math.rad(CFG.TiltX), 0, math.rad(CFG.TiltZ))
+    local tilted = tiltCF:VectorToWorldSpace(local3)
+    return Vector3.new(centerPos.X + tilted.X, centerPos.Y + CFG.Height + tilted.Y, centerPos.Z + tilted.Z)
+end
+
+-- ── تطبيق نظام الفيزياء على جزء (من السكربت الثاني) ────────────
+local function ForcePart(part, attachTarget)
+    if not IsPhysicsPart(part) then return end
+
+    pcall(function()
+        -- تنظيف كل القوى القديمة
+        for _, child in ipairs(part:GetChildren()) do
+            if child:IsA("BodyMover")
+            or child:IsA("RocketPropulsion")
+            or child.Name == "_OrbAtt"
+            or child.Name == "_OrbAlign"
+            or child.Name == "_OrbTorque" then
+                child:Destroy()
+            end
+        end
+
+        part.CanCollide = false
+        part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+
+        -- Torque للدوران
+        local torque = Instance.new("Torque", part)
+        torque.Name   = "_OrbTorque"
+        torque.Torque = Vector3.new(100000, 100000, 100000)
+
+        -- Attachment على الجزء
+        local att2 = Instance.new("Attachment", part)
+        att2.Name = "_OrbAtt"
+        torque.Attachment0 = att2
+
+        -- AlignPosition يربط الجزء بـ attachTarget
+        local ap = Instance.new("AlignPosition", part)
+        ap.Name          = "_OrbAlign"
+        ap.MaxForce      = math.huge
+        ap.MaxVelocity   = math.huge
+        ap.Responsiveness = 200
+        ap.Attachment0   = att2
+        ap.Attachment1   = attachTarget
+
+        -- تسجيل في نظام الشبكة
+        getgenv().OrbitalNetwork.RetainPart(part)
+    end)
+end
+
+-- ── إنشاء Attachment مستقل لكل موقع في الحلقة ──────────────────
+local function AddPartToRing(part)
+    if #OrbitalParts >= CFG.MaxParts then return end
+    if not IsPhysicsPart(part) then return end
+    if AlreadySeen[part] then return end
+    AlreadySeen[part] = true
+
+    task.spawn(function()
+        task.wait(0.05)
+        if not RingActive then return end
+        if not part or not part.Parent then return end
+        if not IsPhysicsPart(part) then return end
+
+        -- كل جزء له Attachment خاص به على AnchorPart
+        local personalAtt = Instance.new("Attachment", AnchorPart)
+        personalAtt.Name = "_OrbPos_" .. tostring(#OrbitalParts + 1)
+
+        ForcePart(part, personalAtt)
+
+        table.insert(OrbitalParts, {
+            part       = part,
+            attachment = personalAtt,
+        })
+    end)
+end
+
+local function CleanupRing()
+    -- تنظيف كل الـ attachments والـ movers
+    for _, entry in ipairs(OrbitalParts) do
+        pcall(function()
+            if entry.attachment and entry.attachment.Parent then
+                entry.attachment:Destroy()
+            end
+            if entry.part and entry.part.Parent then
+                for _, child in ipairs(entry.part:GetChildren()) do
+                    if child.Name == "_OrbAtt"
+                    or child.Name == "_OrbAlign"
+                    or child.Name == "_OrbTorque" then
+                        child:Destroy()
+                    end
+                end
+            end
+        end)
+    end
+    OrbitalParts = {}
+    AlreadySeen  = {}
+    getgenv().OrbitalNetwork.BaseParts = {}
+
+    if HeartbeatConn then HeartbeatConn:Disconnect() HeartbeatConn = nil end
+    if DescConn       then DescConn:Disconnect()       DescConn = nil       end
+end
+
+local function StartRing()
+    if RingActive then return end
+    RingActive = true
+    AlreadySeen = {}
+
+    local filtered = GetFilteredParts()
+    local toAdd    = math.min(#filtered, CFG.MaxParts)
+    for i = 1, toAdd do AddPartToRing(filtered[i]) end
+
+    -- ── Heartbeat: تحريك الـ Attachments في مسار الحلقة ─────────
+    -- الـ AlignPosition يتبع الـ Attachment تلقائياً → فيزياء حقيقية
+    HeartbeatConn = RunService.Heartbeat:Connect(function(dt)
+        local centerPos = GetTargetHeadPos()
+        if not centerPos then return end
+
+        -- تحديث موضع AnchorPart ليتبع الهدف
+        pcall(function()
+            AnchorPart.CFrame = CFrame.new(centerPos)
+        end)
+
+        CurrentAngle = (CurrentAngle + CFG.Speed * dt) % (2 * math.pi)
+
+        local total = #OrbitalParts
+        if total == 0 then return end
+
+        for i = #OrbitalParts, 1, -1 do
+            local entry = OrbitalParts[i]
+            if not entry.part or not entry.part.Parent
+            or not entry.attachment or not entry.attachment.Parent then
+                -- تنظيف entry ميت
+                pcall(function()
+                    if entry.attachment and entry.attachment.Parent then
+                        entry.attachment:Destroy()
+                    end
+                end)
+                table.remove(OrbitalParts, i)
+            else
+                -- نحرّك الـ Attachment إلى موقع الحلقة
+                local targetPos = GetRingPosition(i, total, centerPos)
+                pcall(function()
+                    entry.attachment.WorldPosition = targetPos
+                end)
+            end
+        end
+    end)
+
+    -- ── إضافة parts جديدة تلقائياً ──────────────────────────────
+    task.spawn(function()
+        while RingActive do
+            task.wait(0.8)
+            if not RingActive then break end
+            if #OrbitalParts >= CFG.MaxParts then task.wait(2) continue end
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if not RingActive then break end
+                if #OrbitalParts >= CFG.MaxParts then break end
+                if AlreadySeen[obj] then continue end
+                if IsPhysicsPart(obj) then
+                    AddPartToRing(obj)
+                end
+            end
+        end
+    end)
+
+    DescConn = Workspace.DescendantAdded:Connect(function(obj)
+        if not RingActive then return end
+        if #OrbitalParts >= CFG.MaxParts then return end
+        if AlreadySeen[obj] then return end
+        task.wait(0.15)
+        if not RingActive then return end
+        if IsPhysicsPart(obj) then
+            AddPartToRing(obj)
+        end
+    end)
+end
+
+local function StopRing()
+    if not RingActive then return end
+    RingActive = false
+    TargetPlayer = nil
+    CleanupRing()
+end
+
+-- ════════════════════════════════════════════════════════════════
+--                        بناء الواجهة
+-- ════════════════════════════════════════════════════════════════
+local function BuildGUI()
+    local guiParent = LocalPlayer:WaitForChild("PlayerGui")
+    pcall(function()
+        local cg = cloneref and cloneref(game:GetService("CoreGui")) or game:GetService("CoreGui")
+        guiParent = cg
+    end)
+    local old = guiParent:FindFirstChild("OrbitalRingUI")
+    if old then old:Destroy() end
+
+    local W, H = 420, 380
+
+    local SG = Instance.new("ScreenGui")
+    SG.Name             = "OrbitalRingUI"
+    SG.ResetOnSpawn     = false
+    SG.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+    SG.DisplayOrder     = 999
+    SG.Parent           = guiParent
+
+    local Main = Instance.new("Frame")
+    Main.Name             = "Main"
+    Main.Size             = UDim2.new(0, W, 0, H)
+    Main.Position         = UDim2.new(0.5, -W/2, 0.5, -H/2)
+    Main.BackgroundColor3 = Color3.fromRGB(9, 9, 18)
+    Main.BorderSizePixel  = 0
+    Main.ClipsDescendants = true
+    Main.Active           = true
+    Main.Draggable        = true
+    Main.Parent           = SG
+    Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+
+    local mainGrad = Instance.new("UIGradient")
+    mainGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(13, 9, 26)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(7,  7, 16)),
+    }
+    mainGrad.Rotation = 135
+    mainGrad.Parent   = Main
+
+    local border = Instance.new("UIStroke")
+    border.Thickness    = 1.5
+    border.Transparency = 0.1
+    border.Parent       = Main
+
+    local hue = 0.72
+    RunService.RenderStepped:Connect(function(dt)
+        hue = (hue + dt * 0.035) % 1
+        pcall(function() border.Color = Color3.fromHSV(hue, 0.85, 1) end)
+    end)
+
+    -- ── Header ──────────────────────────────────────────────────
+    local Header = Instance.new("Frame")
+    Header.Size             = UDim2.new(1, 0, 0, 40)
+    Header.BackgroundColor3 = Color3.fromRGB(14, 10, 30)
+    Header.BorderSizePixel  = 0
+    Header.Parent           = Main
+    Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
+
+    local hGrad = Instance.new("UIGradient")
+    hGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(110, 35, 240)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(190, 35, 170)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(35,  75, 245)),
+    }
+    hGrad.Rotation = 90
+    hGrad.Parent   = Header
+    TweenService:Create(hGrad, TweenInfo.new(4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Rotation = 270}):Play()
+
+    local TitleLbl = Instance.new("TextLabel")
+    TitleLbl.Size                   = UDim2.new(1, -100, 1, 0)
+    TitleLbl.Position               = UDim2.new(0, 14, 0, 0)
+    TitleLbl.BackgroundTransparency = 1
+    TitleLbl.Text                   = "🌀  ORBITAL RING  v4.2"
+    TitleLbl.TextColor3             = Color3.new(1, 1, 1)
+    TitleLbl.Font                   = Enum.Font.GothamBold
+    TitleLbl.TextSize               = 14
+    TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    TitleLbl.TextStrokeTransparency = 0.45
+    TitleLbl.Parent                 = Header
+    TweenService:Create(TitleLbl, TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {TextTransparency = 0.25}):Play()
+
+    local CountLbl = Instance.new("TextLabel")
+    CountLbl.Size                   = UDim2.new(0, 80, 1, 0)
+    CountLbl.Position               = UDim2.new(1, -118, 0, 0)
+    CountLbl.BackgroundTransparency = 1
+    CountLbl.Text                   = "0 Parts"
+    CountLbl.TextColor3             = Color3.fromRGB(160, 170, 210)
+    CountLbl.Font                   = Enum.Font.Gotham
+    CountLbl.TextSize               = 11
+    CountLbl.TextXAlignment         = Enum.TextXAlignment.Right
+    CountLbl.Parent                 = Header
+
+    RunService.Heartbeat:Connect(function()
+        if tick() % 0.5 > 0.05 then return end
+        pcall(function() CountLbl.Text = #OrbitalParts .. " / " .. CFG.MaxParts end)
+    end)
+
+    local MinBtn = Instance.new("TextButton")
+    MinBtn.Size             = UDim2.new(0, 26, 0, 26)
+    MinBtn.Position         = UDim2.new(1, -34, 0.5, -13)
+    MinBtn.BackgroundColor3 = Color3.fromRGB(22, 18, 42)
+    MinBtn.Text             = "—"
+    MinBtn.TextColor3       = Color3.new(1, 1, 1)
+    MinBtn.Font             = Enum.Font.GothamBold
+    MinBtn.TextSize         = 13
+    MinBtn.Parent           = Header
+    Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+    local minimized = false
+    MinBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        MinBtn.Text = minimized and "□" or "—"
+        TweenService:Create(Main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, W, 0, minimized and 40 or H)
+        }):Play()
+    end)
+
+    -- ── Body ────────────────────────────────────────────────────
+    local Body = Instance.new("Frame")
+    Body.Size                   = UDim2.new(1, -16, 1, -50)
+    Body.Position               = UDim2.new(0, 8, 0, 46)
+    Body.BackgroundTransparency = 1
+    Body.Parent                 = Main
+
+    local function MakeSlider(parent, label, icon, minVal, maxVal, defaultVal, step, onChanged)
+        local f = Instance.new("Frame")
+        f.Size             = UDim2.new(1, 0, 0, 40)
+        f.BackgroundColor3 = Color3.fromRGB(14, 12, 28)
+        f.BorderSizePixel  = 0
+        f.Parent           = parent
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+
+        local top = Instance.new("Frame")
+        top.Size                   = UDim2.new(1, 0, 0, 18)
+        top.BackgroundTransparency = 1
+        top.Parent                 = f
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size                   = UDim2.new(0.6, 0, 1, 0)
+        lbl.Position               = UDim2.new(0, 9, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text                   = icon .. "  " .. label
+        lbl.TextColor3             = Color3.fromRGB(195, 200, 230)
+        lbl.Font                   = Enum.Font.GothamBold
+        lbl.TextSize               = 10
+        lbl.TextXAlignment         = Enum.TextXAlignment.Left
+        lbl.Parent                 = top
+
+        local valLbl = Instance.new("TextLabel")
+        valLbl.Size                   = UDim2.new(0.4, -9, 1, 0)
+        valLbl.Position               = UDim2.new(0.6, 0, 0, 0)
+        valLbl.BackgroundTransparency = 1
+        valLbl.Text                   = tostring(defaultVal)
+        valLbl.TextColor3             = Color3.fromRGB(160, 110, 255)
+        valLbl.Font                   = Enum.Font.GothamBold
+        valLbl.TextSize               = 10
+        valLbl.TextXAlignment         = Enum.TextXAlignment.Right
+        valLbl.Parent                 = top
+
+        local track = Instance.new("Frame")
+        track.Size             = UDim2.new(1, -18, 0, 4)
+        track.Position         = UDim2.new(0, 9, 0, 30)
+        track.BackgroundColor3 = Color3.fromRGB(30, 26, 50)
+        track.BorderSizePixel  = 0
+        track.Parent           = f
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+        local pct0 = (defaultVal - minVal) / (maxVal - minVal)
+
+        local fill = Instance.new("Frame")
+        fill.Size             = UDim2.new(pct0, 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(130, 55, 255)
+        fill.BorderSizePixel  = 0
+        fill.Parent           = track
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+        local fg = Instance.new("UIGradient")
+        fg.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(95,  35, 210)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(215, 75, 195)),
+        }
+        fg.Parent = fill
+
+        local thumb = Instance.new("TextButton")
+        thumb.Size             = UDim2.new(0, 12, 0, 12)
+        thumb.Position         = UDim2.new(pct0, -6, 0.5, -6)
+        thumb.BackgroundColor3 = Color3.new(1, 1, 1)
+        thumb.Text             = ""
+        thumb.ZIndex           = 3
+        thumb.Parent           = track
+        Instance.new("UICorner", thumb).CornerRadius = UDim.new(1, 0)
+
+        local dragging = false
+        thumb.MouseButton1Down:Connect(function() dragging = true end)
+        UserInputService.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1
+            or inp.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        RunService.RenderStepped:Connect(function()
+            if not dragging then return end
+            local mx  = UserInputService:GetMouseLocation().X
+            local rel = math.clamp((mx - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
+            local val
+            if step < 1 then
+                val = math.floor((minVal + (maxVal - minVal) * rel) / step + 0.5) * step
+                val = math.floor(val * 100 + 0.5) / 100
+            else
+                val = math.floor(minVal + (maxVal - minVal) * rel)
+            end
+            val = math.clamp(val, minVal, maxVal)
+            pcall(function()
+                fill.Size      = UDim2.new(rel, 0, 1, 0)
+                thumb.Position = UDim2.new(rel, -6, 0.5, -6)
+                valLbl.Text    = tostring(val)
+            end)
+            onChanged(val)
+        end)
+        thumb.MouseEnter:Connect(function()
+            TweenService:Create(thumb, TweenInfo.new(0.1), {Size = UDim2.new(0, 15, 0, 15), Position = UDim2.new(thumb.Position.X.Scale, -7, 0.5, -7)}):Play()
+        end)
+        thumb.MouseLeave:Connect(function()
+            TweenService:Create(thumb, TweenInfo.new(0.1), {Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(thumb.Position.X.Scale, -6, 0.5, -6)}):Play()
+        end)
+        return f
+    end
+
+    local leftCol = Instance.new("Frame")
+    leftCol.Size                   = UDim2.new(0.5, -5, 0, 262)
+    leftCol.Position               = UDim2.new(0, 0, 0, 0)
+    leftCol.BackgroundTransparency = 1
+    leftCol.Parent                 = Body
+    local leftLL = Instance.new("UIListLayout")
+    leftLL.Padding   = UDim.new(0, 5)
+    leftLL.SortOrder = Enum.SortOrder.LayoutOrder
+    leftLL.Parent    = leftCol
+
+    local rightCol = Instance.new("Frame")
+    rightCol.Size                   = UDim2.new(0.5, -5, 0, 262)
+    rightCol.Position               = UDim2.new(0.5, 5, 0, 0)
+    rightCol.BackgroundTransparency = 1
+    rightCol.Parent                 = Body
+    local rightLL = Instance.new("UIListLayout")
+    rightLL.Padding   = UDim.new(0, 5)
+    rightLL.SortOrder = Enum.SortOrder.LayoutOrder
+    rightLL.Parent    = rightCol
+
+    MakeSlider(leftCol,  "الارتفاع",     "🔼", 2,   20,  CFG.Height,   0.5, function(v) CFG.Height   = v end)
+    MakeSlider(leftCol,  "نصف القطر",    "⭕", 2,   15,  CFG.Radius,   0.5, function(v) CFG.Radius   = v end)
+    MakeSlider(leftCol,  "السرعة",       "⚡", 0.1, 8,   CFG.Speed,    0.1, function(v) CFG.Speed    = v end)
+    MakeSlider(leftCol,  "عدد البلوكات", "📦", 1,   500, CFG.MaxParts, 1,   function(v)
+        CFG.MaxParts = v
+        while #OrbitalParts > CFG.MaxParts do
+            local last = table.remove(OrbitalParts)
+            if last then
+                pcall(function()
+                    if last.attachment and last.attachment.Parent then last.attachment:Destroy() end
+                end)
+            end
+        end
+    end)
+
+    MakeSlider(rightCol, "إمالة X",      "📐", -80, 80,  CFG.TiltX,    1,   function(v) CFG.TiltX   = v end)
+    MakeSlider(rightCol, "إمالة Z",      "📐", -80, 80,  CFG.TiltZ,    1,   function(v) CFG.TiltZ   = v end)
+
+    -- ── فلترة الحجم ─────────────────────────────────────────────
+    local filterRow = Instance.new("Frame")
+    filterRow.Size             = UDim2.new(1, 0, 0, 32)
+    filterRow.BackgroundColor3 = Color3.fromRGB(14, 12, 28)
+    filterRow.BorderSizePixel  = 0
+    filterRow.Parent           = rightCol
+    Instance.new("UICorner", filterRow).CornerRadius = UDim.new(0, 8)
+
+    local filterLbl = Instance.new("TextLabel")
+    filterLbl.Size                   = UDim2.new(1, -58, 1, 0)
+    filterLbl.Position               = UDim2.new(0, 10, 0, 0)
+    filterLbl.BackgroundTransparency = 1
+    filterLbl.Text                   = "🔍  فلترة الحجم"
+    filterLbl.TextColor3             = Color3.fromRGB(195, 200, 230)
+    filterLbl.Font                   = Enum.Font.GothamBold
+    filterLbl.TextSize               = 10
+    filterLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    filterLbl.Parent                 = filterRow
+
+    local ftbg = Instance.new("TextButton")
+    ftbg.Size             = UDim2.new(0, 38, 0, 18)
+    ftbg.Position         = UDim2.new(1, -46, 0.5, -9)
+    ftbg.BackgroundColor3 = CFG.FilterEnabled and Color3.fromRGB(30, 175, 95) or Color3.fromRGB(38, 34, 60)
+    ftbg.Text             = ""
+    ftbg.Parent           = filterRow
+    Instance.new("UICorner", ftbg).CornerRadius = UDim.new(1, 0)
+
+    local fdot = Instance.new("Frame")
+    fdot.Size             = UDim2.new(0, 13, 0, 13)
+    fdot.Position         = CFG.FilterEnabled and UDim2.new(1, -16, 0.5, -6) or UDim2.new(0, 3, 0.5, -6)
+    fdot.BackgroundColor3 = Color3.new(1, 1, 1)
+    fdot.Parent           = ftbg
+    Instance.new("UICorner", fdot).CornerRadius = UDim.new(1, 0)
+
+    ftbg.MouseButton1Click:Connect(function()
+        CFG.FilterEnabled = not CFG.FilterEnabled
+        TweenService:Create(ftbg, TweenInfo.new(0.2, Enum.EasingStyle.Quint), {
+            BackgroundColor3 = CFG.FilterEnabled and Color3.fromRGB(30, 175, 95) or Color3.fromRGB(38, 34, 60)
+        }):Play()
+        TweenService:Create(fdot, TweenInfo.new(0.2, Enum.EasingStyle.Quint), {
+            Position = CFG.FilterEnabled and UDim2.new(1, -16, 0.5, -6) or UDim2.new(0, 3, 0.5, -6)
+        }):Play()
+    end)
+
+    -- ════════════════════════════════════════════════════════════
+    --   قسم استهداف لاعب
+    -- ════════════════════════════════════════════════════════════
+    local targetSection = Instance.new("Frame")
+    targetSection.Size             = UDim2.new(1, 0, 0, 54)
+    targetSection.Position         = UDim2.new(0, 0, 0, 265)
+    targetSection.BackgroundColor3 = Color3.fromRGB(14, 10, 26)
+    targetSection.BorderSizePixel  = 0
+    targetSection.Parent           = Body
+    Instance.new("UICorner", targetSection).CornerRadius = UDim.new(0, 8)
+
+    local tsStroke = Instance.new("UIStroke")
+    tsStroke.Color        = Color3.fromRGB(255, 80, 100)
+    tsStroke.Thickness    = 1
+    tsStroke.Transparency = 0.5
+    tsStroke.Parent       = targetSection
+
+    local tSectionLbl = Instance.new("TextLabel")
+    tSectionLbl.Size                   = UDim2.new(1, 0, 0, 16)
+    tSectionLbl.Position               = UDim2.new(0, 8, 0, 4)
+    tSectionLbl.BackgroundTransparency = 1
+    tSectionLbl.Text                   = "🎯  استهداف لاعب  (أول حرفين)"
+    tSectionLbl.TextColor3             = Color3.fromRGB(255, 140, 160)
+    tSectionLbl.Font                   = Enum.Font.GothamBold
+    tSectionLbl.TextSize               = 10
+    tSectionLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    tSectionLbl.Parent                 = targetSection
+
+    local nameBox = Instance.new("TextBox")
+    nameBox.Size             = UDim2.new(0.38, 0, 0, 26)
+    nameBox.Position         = UDim2.new(0, 8, 0, 22)
+    nameBox.BackgroundColor3 = Color3.fromRGB(22, 18, 42)
+    nameBox.Text             = ""
+    nameBox.PlaceholderText  = "مثال: Ab"
+    nameBox.TextColor3       = Color3.new(1, 1, 1)
+    nameBox.PlaceholderColor3= Color3.fromRGB(120, 100, 160)
+    nameBox.Font             = Enum.Font.GothamBold
+    nameBox.TextSize         = 12
+    nameBox.ClearTextOnFocus = false
+    nameBox.Parent           = targetSection
+    Instance.new("UICorner", nameBox).CornerRadius = UDim.new(0, 6)
+    Instance.new("UIStroke", nameBox).Color = Color3.fromRGB(80, 60, 130)
+
+    local foundLbl = Instance.new("TextLabel")
+    foundLbl.Size                   = UDim2.new(0.35, 0, 0, 26)
+    foundLbl.Position               = UDim2.new(0.39, 4, 0, 22)
+    foundLbl.BackgroundTransparency = 1
+    foundLbl.Text                   = "—"
+    foundLbl.TextColor3             = Color3.fromRGB(140, 160, 200)
+    foundLbl.Font                   = Enum.Font.Gotham
+    foundLbl.TextSize               = 10
+    foundLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    foundLbl.Parent                 = targetSection
+
+    local sendBtn = Instance.new("TextButton")
+    sendBtn.Size             = UDim2.new(0, 68, 0, 26)
+    sendBtn.Position         = UDim2.new(1, -76, 0, 22)
+    sendBtn.BackgroundColor3 = Color3.fromRGB(170, 30, 55)
+    sendBtn.Text             = "🎯 أرسل"
+    sendBtn.TextColor3       = Color3.new(1, 1, 1)
+    sendBtn.Font             = Enum.Font.GothamBold
+    sendBtn.TextSize         = 11
+    sendBtn.Parent           = targetSection
+    Instance.new("UICorner", sendBtn).CornerRadius = UDim.new(0, 6)
+
+    nameBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local prefix = nameBox.Text:lower()
+        if #prefix == 0 then
+            foundLbl.Text       = "—"
+            foundLbl.TextColor3 = Color3.fromRGB(140, 160, 200)
+            return
+        end
+        local found = nil
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Name:lower():sub(1, #prefix) == prefix then
+                found = plr break
+            end
+        end
+        if found then
+            foundLbl.Text       = "✔ " .. found.Name
+            foundLbl.TextColor3 = Color3.fromRGB(75, 255, 130)
+        else
+            foundLbl.Text       = "✘ لا يوجد"
+            foundLbl.TextColor3 = Color3.fromRGB(255, 90, 90)
+        end
+    end)
+
+    sendBtn.MouseButton1Click:Connect(function()
+        local prefix = nameBox.Text:lower()
+        if #prefix == 0 then return end
+        local found = nil
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Name:lower():sub(1, #prefix) == prefix then
+                found = plr break
+            end
+        end
+        if not found then
+            foundLbl.Text       = "✘ لم يُعثر على لاعب"
+            foundLbl.TextColor3 = Color3.fromRGB(255, 90, 90)
+            return
+        end
+        TargetPlayer = found
+        foundLbl.Text       = "🎯 " .. found.Name
+        foundLbl.TextColor3 = Color3.fromRGB(255, 200, 60)
+        if not RingActive then StartRing() end
+        TweenService:Create(sendBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(255, 60, 80)}):Play()
+        task.delay(0.2, function()
+            pcall(function()
+                TweenService:Create(sendBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(170, 30, 55)}):Play()
+            end)
+        end)
+    end)
+
+    local resetTargetBtn = Instance.new("TextButton")
+    resetTargetBtn.Size             = UDim2.new(0, 14, 0, 14)
+    resetTargetBtn.Position         = UDim2.new(1, -16, 0, 6)
+    resetTargetBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 80)
+    resetTargetBtn.Text             = "✕"
+    resetTargetBtn.TextColor3       = Color3.fromRGB(200, 150, 200)
+    resetTargetBtn.Font             = Enum.Font.GothamBold
+    resetTargetBtn.TextSize         = 9
+    resetTargetBtn.Parent           = targetSection
+    Instance.new("UICorner", resetTargetBtn).CornerRadius = UDim.new(1, 0)
+
+    resetTargetBtn.MouseButton1Click:Connect(function()
+        TargetPlayer = nil
+        nameBox.Text        = ""
+        foundLbl.Text       = "—"
+        foundLbl.TextColor3 = Color3.fromRGB(140, 160, 200)
+    end)
+
+    -- ════════════════════════════════════════════════════════════
+    --   أزرار الحالة والتفعيل
+    -- ════════════════════════════════════════════════════════════
+    local StatusLbl = Instance.new("TextLabel")
+    StatusLbl.Size                   = UDim2.new(1, 0, 0, 14)
+    StatusLbl.BackgroundTransparency = 1
+    StatusLbl.Text                   = "⬤  متوقف"
+    StatusLbl.TextColor3             = Color3.fromRGB(180, 75, 75)
+    StatusLbl.Font                   = Enum.Font.GothamBold
+    StatusLbl.TextSize               = 10
+    StatusLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    StatusLbl.Parent                 = leftCol
+
+    local ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Size             = UDim2.new(1, 0, 0, 34)
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(85, 28, 195)
+    ToggleBtn.Text             = "🌀  تفعيل الحلقة"
+    ToggleBtn.TextColor3       = Color3.new(1, 1, 1)
+    ToggleBtn.Font             = Enum.Font.GothamBold
+    ToggleBtn.TextSize         = 13
+    ToggleBtn.Parent           = leftCol
+    Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 9)
+
+    local tbStroke = Instance.new("UIStroke")
+    tbStroke.Color        = Color3.fromRGB(145, 75, 255)
+    tbStroke.Thickness    = 1.5
+    tbStroke.Transparency = 0.3
+    tbStroke.Parent       = ToggleBtn
+    TweenService:Create(tbStroke, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.78}):Play()
+
+    ToggleBtn.MouseEnter:Connect(function()
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = RingActive and Color3.fromRGB(135, 30, 48) or Color3.fromRGB(110, 42, 220)
+        }):Play()
+    end)
+    ToggleBtn.MouseLeave:Connect(function()
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = RingActive and Color3.fromRGB(115, 28, 42) or Color3.fromRGB(85, 28, 195)
+        }):Play()
+    end)
+
+    ToggleBtn.MouseButton1Click:Connect(function()
+        if not RingActive then
+            local char = LocalPlayer.Character
+            if not char or not char:FindFirstChild("Head") then
+                StatusLbl.Text       = "⚠  ليس في اللعبة!"
+                StatusLbl.TextColor3 = Color3.fromRGB(255, 200, 0)
+                return
+            end
+            StartRing()
+            ToggleBtn.Text = "⏹  إيقاف الحلقة"
+            TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(115, 28, 42)}):Play()
+            tbStroke.Color       = Color3.fromRGB(255, 75, 105)
+            StatusLbl.Text       = "⬤  نشط"
+            StatusLbl.TextColor3 = Color3.fromRGB(75, 255, 130)
+        else
+            StopRing()
+            ToggleBtn.Text = "🌀  تفعيل الحلقة"
+            TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(85, 28, 195)}):Play()
+            tbStroke.Color       = Color3.fromRGB(145, 75, 255)
+            StatusLbl.Text       = "⬤  متوقف"
+            StatusLbl.TextColor3 = Color3.fromRGB(180, 75, 75)
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightControl then
+            local show = not Main.Visible
+            Main.Visible = show
+            if show then
+                Main.Size = UDim2.new(0, 0, 0, 0)
+                Main.Position = UDim2.new(0.5, 0, 0.5, 0)
+                TweenService:Create(Main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                    Size     = UDim2.new(0, W, 0, minimized and 40 or H),
+                    Position = UDim2.new(0.5, -W/2, 0.5, -(minimized and 20 or H/2)),
+                }):Play()
+            end
+        end
+    end)
+
+    Main.Size                   = UDim2.new(0, 0, 0, 0)
+    Main.Position               = UDim2.new(0.5, 0, 0.5, 0)
+    Main.BackgroundTransparency = 1
+    TweenService:Create(Main, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Size                    = UDim2.new(0, W, 0, H),
+        Position                = UDim2.new(0.5, -W/2, 0.5, -H/2),
+        BackgroundTransparency  = 0,
+    }):Play()
+
+    return SG
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if RingActive then
+        task.wait(1)
+        local wasActive = RingActive
+        StopRing()
+        if wasActive then
+            task.wait(0.5)
+            StartRing()
+        end
+    end
+end)
+
+BuildGUI()
+print("✅ Orbital Ring v4.2 | SimulationRadius + AlignPosition Network | RightControl لإخفاء القائمة")
+            table.insert(groups, {refSize = part.Size, parts = {part}})
+        end
+    end
+    local best = {}
+    for _, group in ipairs(groups) do
+        if #group.parts > #best then best = group.parts end
+    end
+    return #best > 0 and best or candidates
+end
+
+local function GetRingPosition(index, total, centerPos)
+    local angle  = CurrentAngle + (index / total) * (2 * math.pi)
+    local local3 = Vector3.new(CFG.Radius * math.cos(angle), 0, CFG.Radius * math.sin(angle))
+    local tiltCF = CFrame.Angles(math.rad(CFG.TiltX), 0, math.rad(CFG.TiltZ))
+    local tilted = tiltCF:VectorToWorldSpace(local3)
+    return Vector3.new(centerPos.X + tilted.X, centerPos.Y + CFG.Height + tilted.Y, centerPos.Z + tilted.Z)
+end
+
+
+local function ForcePart(part, attachTarget)
+    if not IsPhysicsPart(part) then return end
+
+    pcall(function()
+        -- تنظيف كل القوى القديمة
+        for _, child in ipairs(part:GetChildren()) do
+            if child:IsA("BodyMover")
+            or child:IsA("RocketPropulsion")
+            or child.Name == "_OrbAtt"
+            or child.Name == "_OrbAlign"
+            or child.Name == "_OrbTorque" then
+                child:Destroy()
+            end
+        end
+
+        part.CanCollide = false
+        part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+
+        -- Torque للدوران
+        local torque = Instance.new("Torque", part)
+        torque.Name   = "_OrbTorque"
+        torque.Torque = Vector3.new(100000, 100000, 100000)
+
+        -- Attachment على الجزء
+        local att2 = Instance.new("Attachment", part)
+        att2.Name = "_OrbAtt"
+        torque.Attachment0 = att2
+
+        -- AlignPosition يربط الجزء بـ attachTarget
+        local ap = Instance.new("AlignPosition", part)
+        ap.Name          = "_OrbAlign"
+        ap.MaxForce      = math.huge
+        ap.MaxVelocity   = math.huge
+        ap.Responsiveness = 200
+        ap.Attachment0   = att2
+        ap.Attachment1   = attachTarget
+
+        -- تسجيل في نظام الشبكة
+        getgenv().OrbitalNetwork.RetainPart(part)
+    end)
+end
+
+-- ── إنشاء Attachment مستقل لكل موقع في الحلقة ──────────────────
+local function AddPartToRing(part)
+    if #OrbitalParts >= CFG.MaxParts then return end
+    if not IsPhysicsPart(part) then return end
+    if AlreadySeen[part] then return end
+    AlreadySeen[part] = true
+
+    task.spawn(function()
+        task.wait(0.05)
+        if not RingActive then return end
+        if not part or not part.Parent then return end
+        if not IsPhysicsPart(part) then return end
+
+        -- كل جزء له Attachment خاص به على AnchorPart
+        local personalAtt = Instance.new("Attachment", AnchorPart)
+        personalAtt.Name = "_OrbPos_" .. tostring(#OrbitalParts + 1)
+
+        ForcePart(part, personalAtt)
+
+        table.insert(OrbitalParts, {
+            part       = part,
+            attachment = personalAtt,
+        })
+    end)
+end
+
+local function CleanupRing()
+    -- تنظيف كل الـ attachments والـ movers
+    for _, entry in ipairs(OrbitalParts) do
+        pcall(function()
+            if entry.attachment and entry.attachment.Parent then
+                entry.attachment:Destroy()
+            end
+            if entry.part and entry.part.Parent then
+                for _, child in ipairs(entry.part:GetChildren()) do
+                    if child.Name == "_OrbAtt"
+                    or child.Name == "_OrbAlign"
+                    or child.Name == "_OrbTorque" then
+                        child:Destroy()
+                    end
+                end
+            end
+        end)
+    end
+    OrbitalParts = {}
+    AlreadySeen  = {}
+    getgenv().OrbitalNetwork.BaseParts = {}
+
+    if HeartbeatConn then HeartbeatConn:Disconnect() HeartbeatConn = nil end
+    if DescConn       then DescConn:Disconnect()       DescConn = nil       end
+end
+
+local function StartRing()
+    if RingActive then return end
+    RingActive = true
+    AlreadySeen = {}
+
+    local filtered = GetFilteredParts()
+    local toAdd    = math.min(#filtered, CFG.MaxParts)
+    for i = 1, toAdd do AddPartToRing(filtered[i]) end
+
+    -- ── Heartbeat: تحريك الـ Attachments في مسار الحلقة ─────────
+    -- الـ AlignPosition يتبع الـ Attachment تلقائياً → فيزياء حقيقية
+    HeartbeatConn = RunService.Heartbeat:Connect(function(dt)
+        local centerPos = GetTargetHeadPos()
+        if not centerPos then return end
+
+        -- تحديث موضع AnchorPart ليتبع الهدف
+        pcall(function()
+            AnchorPart.CFrame = CFrame.new(centerPos)
+        end)
+
+        CurrentAngle = (CurrentAngle + CFG.Speed * dt) % (2 * math.pi)
+
+        local total = #OrbitalParts
+        if total == 0 then return end
+
+        for i = #OrbitalParts, 1, -1 do
+            local entry = OrbitalParts[i]
+            if not entry.part or not entry.part.Parent
+            or not entry.attachment or not entry.attachment.Parent then
+                -- تنظيف entry ميت
+                pcall(function()
+                    if entry.attachment and entry.attachment.Parent then
+                        entry.attachment:Destroy()
+                    end
+                end)
+                table.remove(OrbitalParts, i)
+            else
+                -- نحرّك الـ Attachment إلى موقع الحلقة
+                local targetPos = GetRingPosition(i, total, centerPos)
+                pcall(function()
+                    entry.attachment.WorldPosition = targetPos
+                end)
+            end
+        end
+    end)
+
+    -- ── إضافة parts جديدة تلقائياً ──────────────────────────────
+    task.spawn(function()
+        while RingActive do
+            task.wait(0.8)
+            if not RingActive then break end
+            if #OrbitalParts >= CFG.MaxParts then task.wait(2) continue end
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if not RingActive then break end
+                if #OrbitalParts >= CFG.MaxParts then break end
+                if AlreadySeen[obj] then continue end
+                if IsPhysicsPart(obj) then
+                    AddPartToRing(obj)
+                end
+            end
+        end
+    end)
+
+    DescConn = Workspace.DescendantAdded:Connect(function(obj)
+        if not RingActive then return end
+        if #OrbitalParts >= CFG.MaxParts then return end
+        if AlreadySeen[obj] then return end
+        task.wait(0.15)
+        if not RingActive then return end
+        if IsPhysicsPart(obj) then
+            AddPartToRing(obj)
+        end
+    end)
+end
+
+local function StopRing()
+    if not RingActive then return end
+    RingActive = false
+    TargetPlayer = nil
+    CleanupRing()
+end
+
+-- ════════════════════════════════════════════════════════════════
+--                        بناء الواجهة
+-- ════════════════════════════════════════════════════════════════
+local function BuildGUI()
+    local guiParent = LocalPlayer:WaitForChild("PlayerGui")
+    pcall(function()
+        local cg = cloneref and cloneref(game:GetService("CoreGui")) or game:GetService("CoreGui")
+        guiParent = cg
+    end)
+    local old = guiParent:FindFirstChild("OrbitalRingUI")
+    if old then old:Destroy() end
+
+    local W, H = 420, 380
+
+    local SG = Instance.new("ScreenGui")
+    SG.Name             = "OrbitalRingUI"
+    SG.ResetOnSpawn     = false
+    SG.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+    SG.DisplayOrder     = 999
+    SG.Parent           = guiParent
+
+    local Main = Instance.new("Frame")
+    Main.Name             = "Main"
+    Main.Size             = UDim2.new(0, W, 0, H)
+    Main.Position         = UDim2.new(0.5, -W/2, 0.5, -H/2)
+    Main.BackgroundColor3 = Color3.fromRGB(9, 9, 18)
+    Main.BorderSizePixel  = 0
+    Main.ClipsDescendants = true
+    Main.Active           = true
+    Main.Draggable        = true
+    Main.Parent           = SG
+    Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+
+    local mainGrad = Instance.new("UIGradient")
+    mainGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(13, 9, 26)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(7,  7, 16)),
+    }
+    mainGrad.Rotation = 135
+    mainGrad.Parent   = Main
+
+    local border = Instance.new("UIStroke")
+    border.Thickness    = 1.5
+    border.Transparency = 0.1
+    border.Parent       = Main
+
+    local hue = 0.72
+    RunService.RenderStepped:Connect(function(dt)
+        hue = (hue + dt * 0.035) % 1
+        pcall(function() border.Color = Color3.fromHSV(hue, 0.85, 1) end)
+    end)
+
+    -- ── Header ──────────────────────────────────────────────────
+    local Header = Instance.new("Frame")
+    Header.Size             = UDim2.new(1, 0, 0, 40)
+    Header.BackgroundColor3 = Color3.fromRGB(14, 10, 30)
+    Header.BorderSizePixel  = 0
+    Header.Parent           = Main
+    Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
+
+    local hGrad = Instance.new("UIGradient")
+    hGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(110, 35, 240)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(190, 35, 170)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(35,  75, 245)),
+    }
+    hGrad.Rotation = 90
+    hGrad.Parent   = Header
+    TweenService:Create(hGrad, TweenInfo.new(4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Rotation = 270}):Play()
+
+    local TitleLbl = Instance.new("TextLabel")
+    TitleLbl.Size                   = UDim2.new(1, -100, 1, 0)
+    TitleLbl.Position               = UDim2.new(0, 14, 0, 0)
+    TitleLbl.BackgroundTransparency = 1
+    TitleLbl.Text                   = "🌀  ORBITAL RING  v4.2"
+    TitleLbl.TextColor3             = Color3.new(1, 1, 1)
+    TitleLbl.Font                   = Enum.Font.GothamBold
+    TitleLbl.TextSize               = 14
+    TitleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    TitleLbl.TextStrokeTransparency = 0.45
+    TitleLbl.Parent                 = Header
+    TweenService:Create(TitleLbl, TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {TextTransparency = 0.25}):Play()
+
+    local CountLbl = Instance.new("TextLabel")
+    CountLbl.Size                   = UDim2.new(0, 80, 1, 0)
+    CountLbl.Position               = UDim2.new(1, -118, 0, 0)
+    CountLbl.BackgroundTransparency = 1
+    CountLbl.Text                   = "0 Parts"
+    CountLbl.TextColor3             = Color3.fromRGB(160, 170, 210)
+    CountLbl.Font                   = Enum.Font.Gotham
+    CountLbl.TextSize               = 11
+    CountLbl.TextXAlignment         = Enum.TextXAlignment.Right
+    CountLbl.Parent                 = Header
+
+    RunService.Heartbeat:Connect(function()
+        if tick() % 0.5 > 0.05 then return end
+        pcall(function() CountLbl.Text = #OrbitalParts .. " / " .. CFG.MaxParts end)
+    end)
+
+    local MinBtn = Instance.new("TextButton")
+    MinBtn.Size             = UDim2.new(0, 26, 0, 26)
+    MinBtn.Position         = UDim2.new(1, -34, 0.5, -13)
+    MinBtn.BackgroundColor3 = Color3.fromRGB(22, 18, 42)
+    MinBtn.Text             = "—"
+    MinBtn.TextColor3       = Color3.new(1, 1, 1)
+    MinBtn.Font             = Enum.Font.GothamBold
+    MinBtn.TextSize         = 13
+    MinBtn.Parent           = Header
+    Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+    local minimized = false
+    MinBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        MinBtn.Text = minimized and "□" or "—"
+        TweenService:Create(Main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, W, 0, minimized and 40 or H)
+        }):Play()
+    end)
+
+    -- ── Body ────────────────────────────────────────────────────
+    local Body = Instance.new("Frame")
+    Body.Size                   = UDim2.new(1, -16, 1, -50)
+    Body.Position               = UDim2.new(0, 8, 0, 46)
+    Body.BackgroundTransparency = 1
+    Body.Parent                 = Main
+
+    local function MakeSlider(parent, label, icon, minVal, maxVal, defaultVal, step, onChanged)
+        local f = Instance.new("Frame")
+        f.Size             = UDim2.new(1, 0, 0, 40)
+        f.BackgroundColor3 = Color3.fromRGB(14, 12, 28)
+        f.BorderSizePixel  = 0
+        f.Parent           = parent
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+
+        local top = Instance.new("Frame")
+        top.Size                   = UDim2.new(1, 0, 0, 18)
+        top.BackgroundTransparency = 1
+        top.Parent                 = f
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size                   = UDim2.new(0.6, 0, 1, 0)
+        lbl.Position               = UDim2.new(0, 9, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text                   = icon .. "  " .. label
+        lbl.TextColor3             = Color3.fromRGB(195, 200, 230)
+        lbl.Font                   = Enum.Font.GothamBold
+        lbl.TextSize               = 10
+        lbl.TextXAlignment         = Enum.TextXAlignment.Left
+        lbl.Parent                 = top
+
+        local valLbl = Instance.new("TextLabel")
+        valLbl.Size                   = UDim2.new(0.4, -9, 1, 0)
+        valLbl.Position               = UDim2.new(0.6, 0, 0, 0)
+        valLbl.BackgroundTransparency = 1
+        valLbl.Text                   = tostring(defaultVal)
+        valLbl.TextColor3             = Color3.fromRGB(160, 110, 255)
+        valLbl.Font                   = Enum.Font.GothamBold
+        valLbl.TextSize               = 10
+        valLbl.TextXAlignment         = Enum.TextXAlignment.Right
+        valLbl.Parent                 = top
+
+        local track = Instance.new("Frame")
+        track.Size             = UDim2.new(1, -18, 0, 4)
+        track.Position         = UDim2.new(0, 9, 0, 30)
+        track.BackgroundColor3 = Color3.fromRGB(30, 26, 50)
+        track.BorderSizePixel  = 0
+        track.Parent           = f
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+        local pct0 = (defaultVal - minVal) / (maxVal - minVal)
+
+        local fill = Instance.new("Frame")
+        fill.Size             = UDim2.new(pct0, 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(130, 55, 255)
+        fill.BorderSizePixel  = 0
+        fill.Parent           = track
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+        local fg = Instance.new("UIGradient")
+        fg.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(95,  35, 210)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(215, 75, 195)),
+        }
+        fg.Parent = fill
+
+        local thumb = Instance.new("TextButton")
+        thumb.Size             = UDim2.new(0, 12, 0, 12)
+        thumb.Position         = UDim2.new(pct0, -6, 0.5, -6)
+        thumb.BackgroundColor3 = Color3.new(1, 1, 1)
+        thumb.Text             = ""
+        thumb.ZIndex           = 3
+        thumb.Parent           = track
+        Instance.new("UICorner", thumb).CornerRadius = UDim.new(1, 0)
+
+        local dragging = false
+        thumb.MouseButton1Down:Connect(function() dragging = true end)
+        UserInputService.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1
+            or inp.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        RunService.RenderStepped:Connect(function()
+            if not dragging then return end
+            local mx  = UserInputService:GetMouseLocation().X
+            local rel = math.clamp((mx - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
+            local val
+            if step < 1 then
+                val = math.floor((minVal + (maxVal - minVal) * rel) / step + 0.5) * step
+                val = math.floor(val * 100 + 0.5) / 100
+            else
+                val = math.floor(minVal + (maxVal - minVal) * rel)
+            end
+            val = math.clamp(val, minVal, maxVal)
+            pcall(function()
+                fill.Size      = UDim2.new(rel, 0, 1, 0)
+                thumb.Position = UDim2.new(rel, -6, 0.5, -6)
+                valLbl.Text    = tostring(val)
+            end)
+            onChanged(val)
+        end)
+        thumb.MouseEnter:Connect(function()
+            TweenService:Create(thumb, TweenInfo.new(0.1), {Size = UDim2.new(0, 15, 0, 15), Position = UDim2.new(thumb.Position.X.Scale, -7, 0.5, -7)}):Play()
+        end)
+        thumb.MouseLeave:Connect(function()
+            TweenService:Create(thumb, TweenInfo.new(0.1), {Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(thumb.Position.X.Scale, -6, 0.5, -6)}):Play()
+        end)
+        return f
+    end
+
+    local leftCol = Instance.new("Frame")
+    leftCol.Size                   = UDim2.new(0.5, -5, 0, 262)
+    leftCol.Position               = UDim2.new(0, 0, 0, 0)
+    leftCol.BackgroundTransparency = 1
+    leftCol.Parent                 = Body
+    local leftLL = Instance.new("UIListLayout")
+    leftLL.Padding   = UDim.new(0, 5)
+    leftLL.SortOrder = Enum.SortOrder.LayoutOrder
+    leftLL.Parent    = leftCol
+
+    local rightCol = Instance.new("Frame")
+    rightCol.Size                   = UDim2.new(0.5, -5, 0, 262)
+    rightCol.Position               = UDim2.new(0.5, 5, 0, 0)
+    rightCol.BackgroundTransparency = 1
+    rightCol.Parent                 = Body
+    local rightLL = Instance.new("UIListLayout")
+    rightLL.Padding   = UDim.new(0, 5)
+    rightLL.SortOrder = Enum.SortOrder.LayoutOrder
+    rightLL.Parent    = rightCol
+
+    MakeSlider(leftCol,  "الارتفاع",     "🔼", 2,   20,  CFG.Height,   0.5, function(v) CFG.Height   = v end)
+    MakeSlider(leftCol,  "نصف القطر",    "⭕", 2,   15,  CFG.Radius,   0.5, function(v) CFG.Radius   = v end)
+    MakeSlider(leftCol,  "السرعة",       "⚡", 0.1, 8,   CFG.Speed,    0.1, function(v) CFG.Speed    = v end)
+    MakeSlider(leftCol,  "عدد البلوكات", "📦", 1,   500, CFG.MaxParts, 1,   function(v)
+        CFG.MaxParts = v
+        while #OrbitalParts > CFG.MaxParts do
+            local last = table.remove(OrbitalParts)
+            if last then
+                pcall(function()
+                    if last.attachment and last.attachment.Parent then last.attachment:Destroy() end
+                end)
+            end
+        end
+    end)
+
+    MakeSlider(rightCol, "إمالة X",      "📐", -80, 80,  CFG.TiltX,    1,   function(v) CFG.TiltX   = v end)
+    MakeSlider(rightCol, "إمالة Z",      "📐", -80, 80,  CFG.TiltZ,    1,   function(v) CFG.TiltZ   = v end)
+
+    -- ── فلترة الحجم ─────────────────────────────────────────────
+    local filterRow = Instance.new("Frame")
+    filterRow.Size             = UDim2.new(1, 0, 0, 32)
+    filterRow.BackgroundColor3 = Color3.fromRGB(14, 12, 28)
+    filterRow.BorderSizePixel  = 0
+    filterRow.Parent           = rightCol
+    Instance.new("UICorner", filterRow).CornerRadius = UDim.new(0, 8)
+
+    local filterLbl = Instance.new("TextLabel")
+    filterLbl.Size                   = UDim2.new(1, -58, 1, 0)
+    filterLbl.Position               = UDim2.new(0, 10, 0, 0)
+    filterLbl.BackgroundTransparency = 1
+    filterLbl.Text                   = "🔍  فلترة الحجم"
+    filterLbl.TextColor3             = Color3.fromRGB(195, 200, 230)
+    filterLbl.Font                   = Enum.Font.GothamBold
+    filterLbl.TextSize               = 10
+    filterLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    filterLbl.Parent                 = filterRow
+
+    local ftbg = Instance.new("TextButton")
+    ftbg.Size             = UDim2.new(0, 38, 0, 18)
+    ftbg.Position         = UDim2.new(1, -46, 0.5, -9)
+    ftbg.BackgroundColor3 = CFG.FilterEnabled and Color3.fromRGB(30, 175, 95) or Color3.fromRGB(38, 34, 60)
+    ftbg.Text             = ""
+    ftbg.Parent           = filterRow
+    Instance.new("UICorner", ftbg).CornerRadius = UDim.new(1, 0)
+
+    local fdot = Instance.new("Frame")
+    fdot.Size             = UDim2.new(0, 13, 0, 13)
+    fdot.Position         = CFG.FilterEnabled and UDim2.new(1, -16, 0.5, -6) or UDim2.new(0, 3, 0.5, -6)
+    fdot.BackgroundColor3 = Color3.new(1, 1, 1)
+    fdot.Parent           = ftbg
+    Instance.new("UICorner", fdot).CornerRadius = UDim.new(1, 0)
+
+    ftbg.MouseButton1Click:Connect(function()
+        CFG.FilterEnabled = not CFG.FilterEnabled
+        TweenService:Create(ftbg, TweenInfo.new(0.2, Enum.EasingStyle.Quint), {
+            BackgroundColor3 = CFG.FilterEnabled and Color3.fromRGB(30, 175, 95) or Color3.fromRGB(38, 34, 60)
+        }):Play()
+        TweenService:Create(fdot, TweenInfo.new(0.2, Enum.EasingStyle.Quint), {
+            Position = CFG.FilterEnabled and UDim2.new(1, -16, 0.5, -6) or UDim2.new(0, 3, 0.5, -6)
+        }):Play()
+    end)
+
+    -- ════════════════════════════════════════════════════════════
+    --   قسم استهداف لاعب
+    -- ════════════════════════════════════════════════════════════
+    local targetSection = Instance.new("Frame")
+    targetSection.Size             = UDim2.new(1, 0, 0, 54)
+    targetSection.Position         = UDim2.new(0, 0, 0, 265)
+    targetSection.BackgroundColor3 = Color3.fromRGB(14, 10, 26)
+    targetSection.BorderSizePixel  = 0
+    targetSection.Parent           = Body
+    Instance.new("UICorner", targetSection).CornerRadius = UDim.new(0, 8)
+
+    local tsStroke = Instance.new("UIStroke")
+    tsStroke.Color        = Color3.fromRGB(255, 80, 100)
+    tsStroke.Thickness    = 1
+    tsStroke.Transparency = 0.5
+    tsStroke.Parent       = targetSection
+
+    local tSectionLbl = Instance.new("TextLabel")
+    tSectionLbl.Size                   = UDim2.new(1, 0, 0, 16)
+    tSectionLbl.Position               = UDim2.new(0, 8, 0, 4)
+    tSectionLbl.BackgroundTransparency = 1
+    tSectionLbl.Text                   = "🎯  استهداف لاعب  (أول حرفين)"
+    tSectionLbl.TextColor3             = Color3.fromRGB(255, 140, 160)
+    tSectionLbl.Font                   = Enum.Font.GothamBold
+    tSectionLbl.TextSize               = 10
+    tSectionLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    tSectionLbl.Parent                 = targetSection
+
+    local nameBox = Instance.new("TextBox")
+    nameBox.Size             = UDim2.new(0.38, 0, 0, 26)
+    nameBox.Position         = UDim2.new(0, 8, 0, 22)
+    nameBox.BackgroundColor3 = Color3.fromRGB(22, 18, 42)
+    nameBox.Text             = ""
+    nameBox.PlaceholderText  = "مثال: Ab"
+    nameBox.TextColor3       = Color3.new(1, 1, 1)
+    nameBox.PlaceholderColor3= Color3.fromRGB(120, 100, 160)
+    nameBox.Font             = Enum.Font.GothamBold
+    nameBox.TextSize         = 12
+    nameBox.ClearTextOnFocus = false
+    nameBox.Parent           = targetSection
+    Instance.new("UICorner", nameBox).CornerRadius = UDim.new(0, 6)
+    Instance.new("UIStroke", nameBox).Color = Color3.fromRGB(80, 60, 130)
+
+    local foundLbl = Instance.new("TextLabel")
+    foundLbl.Size                   = UDim2.new(0.35, 0, 0, 26)
+    foundLbl.Position               = UDim2.new(0.39, 4, 0, 22)
+    foundLbl.BackgroundTransparency = 1
+    foundLbl.Text                   = "—"
+    foundLbl.TextColor3             = Color3.fromRGB(140, 160, 200)
+    foundLbl.Font                   = Enum.Font.Gotham
+    foundLbl.TextSize               = 10
+    foundLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    foundLbl.Parent                 = targetSection
+
+    local sendBtn = Instance.new("TextButton")
+    sendBtn.Size             = UDim2.new(0, 68, 0, 26)
+    sendBtn.Position         = UDim2.new(1, -76, 0, 22)
+    sendBtn.BackgroundColor3 = Color3.fromRGB(170, 30, 55)
+    sendBtn.Text             = "🎯 أرسل"
+    sendBtn.TextColor3       = Color3.new(1, 1, 1)
+    sendBtn.Font             = Enum.Font.GothamBold
+    sendBtn.TextSize         = 11
+    sendBtn.Parent           = targetSection
+    Instance.new("UICorner", sendBtn).CornerRadius = UDim.new(0, 6)
+
+    nameBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local prefix = nameBox.Text:lower()
+        if #prefix == 0 then
+            foundLbl.Text       = "—"
+            foundLbl.TextColor3 = Color3.fromRGB(140, 160, 200)
+            return
+        end
+        local found = nil
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Name:lower():sub(1, #prefix) == prefix then
+                found = plr break
+            end
+        end
+        if found then
+            foundLbl.Text       = "✔ " .. found.Name
+            foundLbl.TextColor3 = Color3.fromRGB(75, 255, 130)
+        else
+            foundLbl.Text       = "✘ لا يوجد"
+            foundLbl.TextColor3 = Color3.fromRGB(255, 90, 90)
+        end
+    end)
+
+    sendBtn.MouseButton1Click:Connect(function()
+        local prefix = nameBox.Text:lower()
+        if #prefix == 0 then return end
+        local found = nil
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Name:lower():sub(1, #prefix) == prefix then
+                found = plr break
+            end
+        end
+        if not found then
+            foundLbl.Text       = "✘ لم يُعثر على لاعب"
+            foundLbl.TextColor3 = Color3.fromRGB(255, 90, 90)
+            return
+        end
+        TargetPlayer = found
+        foundLbl.Text       = "🎯 " .. found.Name
+        foundLbl.TextColor3 = Color3.fromRGB(255, 200, 60)
+        if not RingActive then StartRing() end
+        TweenService:Create(sendBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(255, 60, 80)}):Play()
+        task.delay(0.2, function()
+            pcall(function()
+                TweenService:Create(sendBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(170, 30, 55)}):Play()
+            end)
+        end)
+    end)
+
+    local resetTargetBtn = Instance.new("TextButton")
+    resetTargetBtn.Size             = UDim2.new(0, 14, 0, 14)
+    resetTargetBtn.Position         = UDim2.new(1, -16, 0, 6)
+    resetTargetBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 80)
+    resetTargetBtn.Text             = "✕"
+    resetTargetBtn.TextColor3       = Color3.fromRGB(200, 150, 200)
+    resetTargetBtn.Font             = Enum.Font.GothamBold
+    resetTargetBtn.TextSize         = 9
+    resetTargetBtn.Parent           = targetSection
+    Instance.new("UICorner", resetTargetBtn).CornerRadius = UDim.new(1, 0)
+
+    resetTargetBtn.MouseButton1Click:Connect(function()
+        TargetPlayer = nil
+        nameBox.Text        = ""
+        foundLbl.Text       = "—"
+        foundLbl.TextColor3 = Color3.fromRGB(140, 160, 200)
+    end)
+
+    -- ════════════════════════════════════════════════════════════
+    --   أزرار الحالة والتفعيل
+    -- ════════════════════════════════════════════════════════════
+    local StatusLbl = Instance.new("TextLabel")
+    StatusLbl.Size                   = UDim2.new(1, 0, 0, 14)
+    StatusLbl.BackgroundTransparency = 1
+    StatusLbl.Text                   = "⬤  متوقف"
+    StatusLbl.TextColor3             = Color3.fromRGB(180, 75, 75)
+    StatusLbl.Font                   = Enum.Font.GothamBold
+    StatusLbl.TextSize               = 10
+    StatusLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    StatusLbl.Parent                 = leftCol
+
+    local ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Size             = UDim2.new(1, 0, 0, 34)
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(85, 28, 195)
+    ToggleBtn.Text             = "🌀  تفعيل الحلقة"
+    ToggleBtn.TextColor3       = Color3.new(1, 1, 1)
+    ToggleBtn.Font             = Enum.Font.GothamBold
+    ToggleBtn.TextSize         = 13
+    ToggleBtn.Parent           = leftCol
+    Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 9)
+
+    local tbStroke = Instance.new("UIStroke")
+    tbStroke.Color        = Color3.fromRGB(145, 75, 255)
+    tbStroke.Thickness    = 1.5
+    tbStroke.Transparency = 0.3
+    tbStroke.Parent       = ToggleBtn
+    TweenService:Create(tbStroke, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.78}):Play()
+
+    ToggleBtn.MouseEnter:Connect(function()
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = RingActive and Color3.fromRGB(135, 30, 48) or Color3.fromRGB(110, 42, 220)
+        }):Play()
+    end)
+    ToggleBtn.MouseLeave:Connect(function()
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = RingActive and Color3.fromRGB(115, 28, 42) or Color3.fromRGB(85, 28, 195)
+        }):Play()
+    end)
+
+    ToggleBtn.MouseButton1Click:Connect(function()
+        if not RingActive then
+            local char = LocalPlayer.Character
+            if not char or not char:FindFirstChild("Head") then
+                StatusLbl.Text       = "⚠  ليس في اللعبة!"
+                StatusLbl.TextColor3 = Color3.fromRGB(255, 200, 0)
+                return
+            end
+            StartRing()
+            ToggleBtn.Text = "⏹  إيقاف الحلقة"
+            TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(115, 28, 42)}):Play()
+            tbStroke.Color       = Color3.fromRGB(255, 75, 105)
+            StatusLbl.Text       = "⬤  نشط"
+            StatusLbl.TextColor3 = Color3.fromRGB(75, 255, 130)
+        else
+            StopRing()
+            ToggleBtn.Text = "🌀  تفعيل الحلقة"
+            TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(85, 28, 195)}):Play()
+            tbStroke.Color       = Color3.fromRGB(145, 75, 255)
+            StatusLbl.Text       = "⬤  متوقف"
+            StatusLbl.TextColor3 = Color3.fromRGB(180, 75, 75)
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightControl then
+            local show = not Main.Visible
+            Main.Visible = show
+            if show then
+                Main.Size = UDim2.new(0, 0, 0, 0)
+                Main.Position = UDim2.new(0.5, 0, 0.5, 0)
+                TweenService:Create(Main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                    Size     = UDim2.new(0, W, 0, minimized and 40 or H),
+                    Position = UDim2.new(0.5, -W/2, 0.5, -(minimized and 20 or H/2)),
+                }):Play()
+            end
+        end
+    end)
+
+    Main.Size                   = UDim2.new(0, 0, 0, 0)
+    Main.Position               = UDim2.new(0.5, 0, 0.5, 0)
+    Main.BackgroundTransparency = 1
+    TweenService:Create(Main, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Size                    = UDim2.new(0, W, 0, H),
+        Position                = UDim2.new(0.5, -W/2, 0.5, -H/2),
+        BackgroundTransparency  = 0,
+    }):Play()
+
+    return SG
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if RingActive then
+        task.wait(1)
+        local wasActive = RingActive
+        StopRing()
+        if wasActive then
+            task.wait(0.5)
+            StartRing()
+        end
+    end
+end)
+
+BuildGUI()
+print("✅ Orbital Ring v4.2 | SimulationRadius + AlignPosition Network | RightControl لإخفاء القائمة")
