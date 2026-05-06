@@ -1,0 +1,436 @@
+-- Extreme Physics Orbit & Instant Fetch (Mobile Support) - Enhanced UI
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+-- === الإعدادات القصوى ===
+local ballPath = game.Workspace:WaitForChild("Maps"):WaitForChild("Ball")
+local orbitSpeed = 200
+local orbitRadius = 3.5
+local pullDuration = 0.1
+
+local isRunning = false
+local connection
+local targetAtt
+
+local transferTarget = nil
+local TRANSFER_ORBIT_RADIUS = 1.2
+local TRANSFER_ORBIT_SPEED = 250
+local RETURN_DISTANCE_THRESHOLD = 25
+
+-- === بناء الواجهة ===
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "OrbitGui"
+Gui.ResetOnSpawn = false
+
+pcall(function()
+    if gethui then
+        Gui.Parent = gethui()
+    else
+        Gui.Parent = game:GetService("CoreGui")
+    end
+end)
+if not Gui.Parent then
+    Gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+-- الإطار الرئيسي
+local MainFrame = Instance.new("Frame", Gui)
+MainFrame.Size = UDim2.new(0, 260, 0, 370)
+MainFrame.Position = UDim2.new(0.5, -130, 0.5, -185)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+
+local Stroke = Instance.new("UIStroke", MainFrame)
+Stroke.Color = Color3.fromRGB(180, 0, 0)
+Stroke.Thickness = 1.5
+
+-- شريط العنوان
+local TitleBar = Instance.new("Frame", MainFrame)
+TitleBar.Size = UDim2.new(1, 0, 0, 38)
+TitleBar.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+TitleBar.BorderSizePixel = 0
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 12)
+
+local TitleFix = Instance.new("Frame", TitleBar)
+TitleFix.Size = UDim2.new(1, 0, 0.5, 0)
+TitleFix.Position = UDim2.new(0, 0, 0.5, 0)
+TitleFix.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+TitleFix.BorderSizePixel = 0
+
+local TitleLabel = Instance.new("TextLabel", TitleBar)
+TitleLabel.Size = UDim2.new(1, -45, 1, 0)
+TitleLabel.Position = UDim2.new(0, 10, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "⚡ الإعصار الخارق"
+TitleLabel.TextColor3 = Color3.new(1, 1, 1)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 15
+
+local ToggleVisBtn = Instance.new("TextButton", TitleBar)
+ToggleVisBtn.Size = UDim2.new(0, 30, 0, 25)
+ToggleVisBtn.Position = UDim2.new(1, -33, 0, 6)
+ToggleVisBtn.BackgroundColor3 = Color3.fromRGB(100, 0, 0)
+ToggleVisBtn.Text = "—"
+ToggleVisBtn.TextColor3 = Color3.new(1,1,1)
+ToggleVisBtn.Font = Enum.Font.GothamBold
+ToggleVisBtn.TextSize = 14
+Instance.new("UICorner", ToggleVisBtn).CornerRadius = UDim.new(0, 6)
+
+-- محتوى القائمة
+local Content = Instance.new("Frame", MainFrame)
+Content.Size = UDim2.new(1, 0, 1, -38)
+Content.Position = UDim2.new(0, 0, 0, 38)
+Content.BackgroundTransparency = 1
+
+local ContentLayout = Instance.new("UIListLayout", Content)
+ContentLayout.Padding = UDim.new(0, 6)
+ContentLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local ContentPadding = Instance.new("UIPadding", Content)
+ContentPadding.PaddingTop = UDim.new(0, 8)
+ContentPadding.PaddingLeft = UDim.new(0, 10)
+ContentPadding.PaddingRight = UDim.new(0, 10)
+
+-- === دوال بناء العناصر ===
+local UIS = game:GetService("UserInputService")
+
+local function makeSliderRow(parent, label, minVal, maxVal, currentVal, callback)
+    local row = Instance.new("Frame", parent)
+    row.Size = UDim2.new(1, 0, 0, 46)
+    row.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+    row.BorderSizePixel = 0
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size = UDim2.new(0.6, 0, 0, 18)
+    lbl.Position = UDim2.new(0, 8, 0, 4)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = label
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 220)
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local valLbl = Instance.new("TextLabel", row)
+    valLbl.Size = UDim2.new(0.35, 0, 0, 18)
+    valLbl.Position = UDim2.new(0.63, 0, 0, 4)
+    valLbl.BackgroundTransparency = 1
+    valLbl.Text = tostring(currentVal)
+    valLbl.TextColor3 = Color3.fromRGB(255, 80, 80)
+    valLbl.Font = Enum.Font.GothamBold
+    valLbl.TextSize = 11
+    valLbl.TextXAlignment = Enum.TextXAlignment.Right
+
+    local track = Instance.new("Frame", row)
+    track.Size = UDim2.new(1, -16, 0, 6)
+    track.Position = UDim2.new(0, 8, 0, 32)
+    track.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    track.BorderSizePixel = 0
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+    local fill = Instance.new("Frame", track)
+    fill.Size = UDim2.new((currentVal - minVal) / (maxVal - minVal), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+    local knob = Instance.new("TextButton", track)
+    knob.Size = UDim2.new(0, 14, 0, 14)
+    knob.Position = UDim2.new((currentVal - minVal) / (maxVal - minVal), -7, 0.5, -7)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.Text = ""
+    knob.BorderSizePixel = 0
+    knob.ZIndex = 5
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+
+    knob.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.Touch or inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.Touch or inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(inp)
+        if not dragging then return end
+        if inp.UserInputType == Enum.UserInputType.Touch or inp.UserInputType == Enum.UserInputType.MouseMovement then
+            local pos = inp.Position
+            local trackPos = track.AbsolutePosition
+            local trackSize = track.AbsoluteSize
+            local rel = math.clamp((pos.X - trackPos.X) / trackSize.X, 0, 1)
+            local val = math.floor(minVal + rel * (maxVal - minVal))
+            fill.Size = UDim2.new(rel, 0, 1, 0)
+            knob.Position = UDim2.new(rel, -7, 0.5, -7)
+            valLbl.Text = tostring(val)
+            callback(val)
+        end
+    end)
+
+    return row
+end
+
+local function makeButton(parent, text, color)
+    local btn = Instance.new("TextButton", parent)
+    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.BackgroundColor3 = color or Color3.fromRGB(170, 0, 0)
+    btn.Text = text
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.BorderSizePixel = 0
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    return btn
+end
+
+local function makeSeparator(parent)
+    local sep = Instance.new("Frame", parent)
+    sep.Size = UDim2.new(1, 0, 0, 1)
+    sep.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    sep.BorderSizePixel = 0
+    return sep
+end
+
+-- === عناصر القائمة ===
+
+makeSliderRow(Content, "⚡ سرعة الدوران", 10, 500, orbitSpeed, function(v)
+    orbitSpeed = v
+end)
+
+makeSliderRow(Content, "🔵 مسافة الدوران", 1, 15, orbitRadius, function(v)
+    orbitRadius = v
+end)
+
+makeSeparator(Content)
+
+-- حقل اسم اللاعب
+local transferRow = Instance.new("Frame", Content)
+transferRow.Size = UDim2.new(1, 0, 0, 46)
+transferRow.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+transferRow.BorderSizePixel = 0
+Instance.new("UICorner", transferRow).CornerRadius = UDim.new(0, 8)
+
+local transferLbl = Instance.new("TextLabel", transferRow)
+transferLbl.Size = UDim2.new(1, -8, 0, 18)
+transferLbl.Position = UDim2.new(0, 8, 0, 4)
+transferLbl.BackgroundTransparency = 1
+transferLbl.Text = "👤 اسم اللاعب للنقل:"
+transferLbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+transferLbl.Font = Enum.Font.Gotham
+transferLbl.TextSize = 11
+transferLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local transferInput = Instance.new("TextBox", transferRow)
+transferInput.Size = UDim2.new(1, -16, 0, 20)
+transferInput.Position = UDim2.new(0, 8, 0, 22)
+transferInput.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+transferInput.Text = ""
+transferInput.PlaceholderText = "اكتب اسم اللاعب..."
+transferInput.TextColor3 = Color3.new(1,1,1)
+transferInput.PlaceholderColor3 = Color3.fromRGB(120,120,120)
+transferInput.Font = Enum.Font.Gotham
+transferInput.TextSize = 11
+transferInput.BorderSizePixel = 0
+Instance.new("UICorner", transferInput).CornerRadius = UDim.new(0, 6)
+
+local TransferBtn = makeButton(Content, "📤 نقل الكرة للاعب", Color3.fromRGB(0, 100, 160))
+
+makeSeparator(Content)
+
+local StartBtn = makeButton(Content, "▶ تفعيل الإعصار الخارق", Color3.fromRGB(170, 0, 0))
+
+-- === منطق السكربت ===
+
+local function claimPart(part)
+    pcall(function()
+        part.Velocity = Vector3.new(0, 5, 0)
+        sethiddenproperty(LocalPlayer, "SimulationRadius", 10000)
+        sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 10000)
+    end)
+end
+
+local function freezeAndReleaseBall()
+    local ball = ballPath
+    if not ball then return end
+    pcall(function()
+        ball.Velocity = Vector3.new(0, 0, 0)
+        ball.RotVelocity = Vector3.new(0, 0, 0)
+        ball.Anchored = true
+    end)
+    task.wait(0.3)
+    pcall(function()
+        ball.Anchored = false
+    end)
+end
+
+local currentLV = nil
+
+local function rebuildForces()
+    local ball = ballPath
+    if not ball then return end
+    for _, v in ipairs(ball:GetChildren()) do
+        if v.Name == "XForce" then v:Destroy() end
+    end
+    if targetAtt then targetAtt:Destroy(); targetAtt = nil end
+
+    local att0 = Instance.new("Attachment", ball)
+    att0.Name = "XForce"
+    targetAtt = Instance.new("Attachment", workspace)
+    targetAtt.Name = "XForce"
+
+    local lv = Instance.new("LinearVelocity", ball)
+    lv.Name = "XForce"
+    lv.Attachment0 = att0
+    lv.RelativeTo = Enum.ActuatorRelativeTo.World
+    lv.MaxForce = 999999999
+    lv.VectorVelocity = Vector3.new(0,0,0)
+
+    ball.CanCollide = false
+    ball.Massless = true
+
+    currentLV = lv
+end
+
+local function stop()
+    isRunning = false
+    transferTarget = nil
+    StartBtn.Text = "▶ تفعيل الإعصار الخارق"
+    StartBtn.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+    TransferBtn.Text = "📤 نقل الكرة للاعب"
+    if connection then connection:Disconnect(); connection = nil end
+    if targetAtt then targetAtt:Destroy(); targetAtt = nil end
+    if ballPath then
+        for _, v in ipairs(ballPath:GetChildren()) do
+            if v.Name == "XForce" then v:Destroy() end
+        end
+    end
+    currentLV = nil
+    freezeAndReleaseBall()
+end
+
+local function start()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local ball = ballPath
+    if not root or not ball then return end
+
+    isRunning = true
+    transferTarget = nil
+    StartBtn.Text = "⏹ إيقاف الإعصار"
+    StartBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+
+    -- القفزة الخاطفة لأخذ الملكية
+    local originalCFrame = root.CFrame
+    root.CFrame = ball.CFrame
+    task.wait(pullDuration)
+    claimPart(ball)
+    root.CFrame = originalCFrame
+
+    rebuildForces()
+
+    connection = RunService.PostSimulation:Connect(function()
+        if not isRunning then return end
+
+        local ball = ballPath
+        if not ball or not currentLV then return end
+
+        local activeTarget = transferTarget or LocalPlayer
+        local activeChar = activeTarget.Character
+        local activeRoot = activeChar and activeChar:FindFirstChild("HumanoidRootPart")
+
+        -- إذا اللاعب الثاني اختفى ارجع للمستخدم
+        if transferTarget and not activeRoot then
+            transferTarget = nil
+            TransferBtn.Text = "📤 نقل الكرة للاعب"
+            rebuildForces()
+            return
+        end
+
+        -- إذا تحرك اللاعب الثاني بعيداً جداً ارجع للمستخدم
+        if transferTarget and activeRoot then
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if myRoot and (activeRoot.Position - myRoot.Position).Magnitude > RETURN_DISTANCE_THRESHOLD then
+                transferTarget = nil
+                TransferBtn.Text = "📤 نقل الكرة للاعب"
+                rebuildForces()
+                return
+            end
+        end
+
+        if not activeRoot then return end
+
+        local useTransfer = (transferTarget ~= nil)
+        local spd = useTransfer and TRANSFER_ORBIT_SPEED or orbitSpeed
+        local rad = useTransfer and TRANSFER_ORBIT_RADIUS or orbitRadius
+
+        local t = tick() * (spd / 5)
+        local goal = activeRoot.Position + Vector3.new(math.cos(t) * rad, 1, math.sin(t) * rad)
+
+        if targetAtt then targetAtt.WorldPosition = goal end
+        currentLV.VectorVelocity = (goal - ball.Position) * 40
+        ball.CanCollide = false
+    end)
+end
+
+-- === أحداث الأزرار ===
+
+StartBtn.Activated:Connect(function()
+    if isRunning then stop() else start() end
+end)
+
+TransferBtn.Activated:Connect(function()
+    if not isRunning then
+        TransferBtn.Text = "⚠️ شغّل الإعصار أولاً"
+        task.delay(2, function() TransferBtn.Text = "📤 نقل الكرة للاعب" end)
+        return
+    end
+
+    local name = transferInput.Text
+    if name == "" then
+        TransferBtn.Text = "⚠️ اكتب اسم اللاعب"
+        task.delay(2, function() TransferBtn.Text = "📤 نقل الكرة للاعب" end)
+        return
+    end
+
+    local target = Players:FindFirstChild(name)
+    if not target or target == LocalPlayer then
+        TransferBtn.Text = "❌ اللاعب غير موجود"
+        task.delay(2, function() TransferBtn.Text = "📤 نقل الكرة للاعب" end)
+        return
+    end
+
+    local targetChar = target.Character
+    local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then
+        TransferBtn.Text = "❌ شخصية اللاعب غير موجودة"
+        task.delay(2, function() TransferBtn.Text = "📤 نقل الكرة للاعب" end)
+        return
+    end
+
+    -- تقريب الكرة فجأة للاعب الثاني
+    pcall(function()
+        ballPath.CFrame = targetRoot.CFrame + Vector3.new(0, 1, 0)
+    end)
+
+    transferTarget = target
+    TransferBtn.Text = "✅ عند: " .. name
+end)
+
+-- إخفاء/إظهار
+local contentVisible = true
+ToggleVisBtn.Activated:Connect(function()
+    contentVisible = not contentVisible
+    Content.Visible = contentVisible
+    MainFrame.Size = contentVisible and UDim2.new(0, 260, 0, 370) or UDim2.new(0, 260, 0, 38)
+    ToggleVisBtn.Text = contentVisible and "—" or "+"
+end)
