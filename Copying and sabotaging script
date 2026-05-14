@@ -1,0 +1,712 @@
+local HDAdminCommands = {
+    ";jail ", ";fire ", ";ice ", ";blind ", ";fling ", ";kill ", ";dog ",
+    ";box ", ";hide ", ";burn ", ";seizure ",
+    ";wormify ", ";chibify ", ";plushify ", ";freakify ", ";frogify ", ";spongify ",
+    ";bigify ", ";creepify ", ";dinofy ", ";fatify ", ";glass ", ";ghost ", ";gold ",
+    ";bigHead ", ";dwarf ", ";giantDwarf ", ";squash ", ";fat ", ";thin ", ";potatoHead ",
+    ";fly ", ";fly2 ", ";speed ", ";fast ", ";slow ", ";jumpHeight ", ";superJump ",
+    ";heavyJump ", ";teleport ", ";to ", ";apparate ", ";handTo ", ";phase ",
+    ";health ", ";heal ", ";god ", ";damage ", ";buffify ",
+    ";shirt ", ";pants ", ";hat ", ";clearHats ", ";face ", ";head ", ";name ",
+    ";char ", ";paint ", ";material ", ";reflectance ", ";transparency ",
+    ";emotes ", ";helicopter ", ";aura ", ";plane ", ";tank ", ";car ", ";ratDance ",
+    ";sit ", ";sit2 ", ";hug ", ";bop ", ";applaud ", ";feet ", ";farm ", ";popular ",
+    ";sturdy ", ";cuteSit ", ";fakeDeath ", ";takeTheL ", ";fryDance ", ";jump ",
+    ";h ", ";hr ", ";ho ", ";hy ", ";hg ", ";hdg ", ";hb ", ";hdb ", ";hp ", ";hpk ", ";hbk ",
+    ";hideName ", ";bodyTypeScale ", ";depth ", ";headSize ", ";hipHeight ", ";cmds ",
+    ";logs ", ";nightVision ", ";laserEyes ", ";ping ", ";cmdbar ", ";refresh ", ";respawn "
+}
+
+local ScreenSpamCommands = {
+    ";h ", ";hr ", ";ho ", ";hy ", ";hg ", ";hdg ", ";hb ", ";hdb ", ";hp ", ";hpk ", ";hbk "
+}
+
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+local RS = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AdminJoyV2"
+ScreenGui.Parent = CoreGui
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local MainFrame = Instance.new("Frame")
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.5, -275, 0.5, -225)
+MainFrame.Size = UDim2.new(0, 550, 0, 450)
+MainFrame.ClipsDescendants = true
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+MainFrame.BackgroundTransparency = 1
+TweenService:Create(MainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+    BackgroundTransparency = 0,
+    Position = UDim2.new(0.5, -275, 0.5, -225)
+}):Play()
+
+local TitleBar = Instance.new("Frame")
+TitleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+TitleBar.Size = UDim2.new(1, 0, 0, 40)
+TitleBar.Position = UDim2.new(0, 0, 0, 0)
+TitleBar.Parent = MainFrame
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 10)
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -40, 1, 0)
+TitleLabel.Position = UDim2.new(0, 15, 0, 0)
+TitleLabel.Text = "⚡ ADMINJOY ULTIMATE V2 ⚡"
+TitleLabel.TextColor3 = Color3.fromRGB(255, 70, 70)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 14
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Parent = TitleBar
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 28, 0, 28)
+MinBtn.Position = UDim2.new(1, -33, 0, 6)
+MinBtn.Text = "−"
+MinBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 62)
+MinBtn.TextColor3 = Color3.new(1, 1, 1)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 18
+MinBtn.Parent = TitleBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+local isMinimized = false
+MinBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    local goal = isMinimized and UDim2.new(0, 550, 0, 40) or UDim2.new(0, 550, 0, 450)
+    TweenService:Create(MainFrame, TweenInfo.new(0.25), {Size = goal}):Play()
+    MinBtn.Text = isMinimized and "+" or "−"
+    TabContainer.Visible = not isMinimized
+end)
+
+local TabBar = Instance.new("Frame")
+TabBar.Position = UDim2.new(0, 8, 0, 46)
+TabBar.Size = UDim2.new(1, -16, 0, 34)
+TabBar.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+TabBar.Parent = MainFrame
+Instance.new("UICorner", TabBar).CornerRadius = UDim.new(0, 8)
+
+local TabButtons = {}
+local TabFrames = {}
+local activeTab = nil
+
+local function switchTab(tabName)
+    for name, frame in pairs(TabFrames) do
+        frame.Visible = (name == tabName)
+    end
+    for _, btn in ipairs(TabButtons) do
+        local isActive = (btn.Name == tabName)
+        btn.BackgroundColor3 = isActive and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(45, 45, 52)
+    end
+end
+
+local function createTabButton(name, text, color)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Text = text
+    btn.BackgroundColor3 = color
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.Size = UDim2.new(0.25, -4, 1, -4)
+    btn.Position = UDim2.new(0, 2, 0, 2)
+    btn.Parent = TabBar
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    btn.MouseButton1Click:Connect(function()
+        switchTab(name)
+    end)
+    table.insert(TabButtons, btn)
+    return btn
+end
+
+createTabButton("Attack", "⚔️ الهجوم", Color3.fromRGB(255,100,100))
+createTabButton("Protect", "🛡️ الحماية", Color3.fromRGB(45,45,52))
+createTabButton("ScreenSpam", "📱 تخريب الشاشة", Color3.fromRGB(45,45,52))
+createTabButton("Custom", "✍️ أوامر مخصصة", Color3.fromRGB(45,45,52))
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.Parent = TabBar
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabLayout.Padding = UDim.new(0, 4)
+tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+local TabContainer = Instance.new("Frame")
+TabContainer.Position = UDim2.new(0, 8, 0, 88)
+TabContainer.Size = UDim2.new(1, -16, 1, -98)
+TabContainer.BackgroundTransparency = 1
+TabContainer.Parent = MainFrame
+
+local function addHover(btn, defaultColor)
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = defaultColor:Lerp(Color3.new(1,1,1), 0.15)}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = defaultColor}):Play()
+    end)
+end
+
+local function createScrollFrame(parent)
+    local sf = Instance.new("ScrollingFrame")
+    sf.Size = UDim2.new(1, 0, 1, 0)
+    sf.BackgroundTransparency = 1
+    sf.ScrollBarThickness = 4
+    sf.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 110)
+    sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    sf.ScrollingDirection = Enum.ScrollingDirection.Y
+    sf.Parent = parent
+    local layout = Instance.new("UIListLayout")
+    layout.Parent = sf
+    layout.Padding = UDim.new(0, 8)
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    return sf
+end
+
+local function CreateFullButton(parent, text, color)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.Text = text
+    btn.BackgroundColor3 = color
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.Parent = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    addHover(btn, color)
+    return btn
+end
+
+local function CreateDoubleRow(parent, btn1Text, btn1Color, btn2Text, btn2Color)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundTransparency = 1
+    row.Parent = parent
+    local btn1 = Instance.new("TextButton")
+    btn1.Size = UDim2.new(0.48, 0, 1, 0)
+    btn1.Position = UDim2.new(0, 0, 0, 0)
+    btn1.Text = btn1Text
+    btn1.BackgroundColor3 = btn1Color
+    btn1.TextColor3 = Color3.new(1, 1, 1)
+    btn1.Font = Enum.Font.GothamBold
+    btn1.TextSize = 12
+    btn1.Parent = row
+    Instance.new("UICorner", btn1).CornerRadius = UDim.new(0, 6)
+    addHover(btn1, btn1Color)
+    local btn2 = Instance.new("TextButton")
+    btn2.Size = UDim2.new(0.48, 0, 1, 0)
+    btn2.Position = UDim2.new(0.52, 0, 0, 0)
+    btn2.Text = btn2Text
+    btn2.BackgroundColor3 = btn2Color
+    btn2.TextColor3 = Color3.new(1, 1, 1)
+    btn2.Font = Enum.Font.GothamBold
+    btn2.TextSize = 12
+    btn2.Parent = row
+    Instance.new("UICorner", btn2).CornerRadius = UDim.new(0, 6)
+    addHover(btn2, btn2Color)
+    return btn1, btn2
+end
+
+local function CreateTextBox(parent, placeholder)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, 0, 0, 32)
+    box.PlaceholderText = placeholder
+    box.BackgroundColor3 = Color3.fromRGB(38, 38, 44)
+    box.TextColor3 = Color3.new(1, 1, 1)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 12
+    box.Parent = parent
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    return box
+end
+
+local function CreateNumberInput(parent, defaultVal, label, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 50)
+    frame.BackgroundTransparency = 1
+    frame.Parent = parent
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.55, 0, 0, 24)
+    lbl.Position = UDim2.new(0, 0, 0, 0)
+    lbl.Text = label
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.Parent = frame
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.4, 0, 0, 24)
+    box.Position = UDim2.new(0.55, 8, 0, 0)
+    box.Text = tostring(defaultVal)
+    box.PlaceholderText = "ثانية"
+    box.BackgroundColor3 = Color3.fromRGB(38, 38, 44)
+    box.TextColor3 = Color3.new(1,1,1)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 12
+    box.Parent = frame
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+    local warning = Instance.new("TextLabel")
+    warning.Size = UDim2.new(1, 0, 0, 16)
+    warning.Position = UDim2.new(0, 0, 0, 28)
+    warning.Text = ""
+    warning.TextColor3 = Color3.fromRGB(255, 80, 80)
+    warning.BackgroundTransparency = 1
+    warning.Font = Enum.Font.Gotham
+    warning.TextSize = 10
+    warning.Parent = frame
+
+    local function validateAndApply()
+        local num = tonumber(box.Text)
+        if num and num >= 0.1 and num <= 10 then
+            warning.Text = ""
+            callback(num)
+        else
+            warning.Text = "أدخل رقم بين 0.1 و 10"
+            box.Text = tostring(defaultVal)
+        end
+    end
+
+    box.FocusLost:Connect(validateAndApply)
+    box:GetPropertyChangedSignal("Text"):Connect(function()
+    end)
+    return frame
+end
+
+local function CreateMultiplierSelector(parent, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 40)
+    frame.BackgroundTransparency = 1
+    frame.Parent = parent
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(0.35, 0, 1, 0)
+    title.Text = "قوة الهجوم:"
+    title.TextColor3 = Color3.fromRGB(220, 220, 220)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 12
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = frame
+
+    local btnsContainer = Instance.new("Frame")
+    btnsContainer.Position = UDim2.new(0.35, 0, 0, 0)
+    btnsContainer.Size = UDim2.new(0.65, 0, 1, 0)
+    btnsContainer.BackgroundTransparency = 1
+    btnsContainer.Parent = frame
+
+    local grid = Instance.new("UIGridLayout")
+    grid.CellSize = UDim2.new(0, 48, 0, 30)
+    grid.CellPadding = UDim2.new(0, 4, 0, 0)
+    grid.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    grid.VerticalAlignment = Enum.VerticalAlignment.Center
+    grid.Parent = btnsContainer
+
+    local buttons = {}
+    for _, val in ipairs({1,2,3,4,5}) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 48, 0, 30)
+        btn.Text = "x"..val
+        local col = val == 1 and Color3.fromRGB(255,100,100) or Color3.fromRGB(45,45,52)
+        btn.BackgroundColor3 = col
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 12
+        btn.Parent = btnsContainer
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+        addHover(btn, col)
+
+        btn.MouseButton1Click:Connect(function()
+            for _, b in ipairs(buttons) do
+                TweenService:Create(b, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(45,45,52)}):Play()
+            end
+            TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(255,100,100)}):Play()
+            callback(val)
+        end)
+        table.insert(buttons, btn)
+    end
+    callback(1)
+    return frame
+end
+
+local TargetInput
+local attackMultiplier = 1
+local attackRepeatSpeed = 0.5
+local teleportSpeed = 0.8
+local customLoopSpeed = 0.7
+local screenSpamSpeed = 0.5
+local teleportChaosActive = false
+local teleportTask = nil
+local protectSelfActive = false
+local protectOtherActive = false
+local protectOtherName = ""
+local screenSpamActive = false
+
+local function SendCmd(msg)
+    if not msg or msg == "" then return end
+    pcall(function()
+        local remote = RS:FindFirstChild("HDAdminHDClient")
+        if remote then
+            remote.Signals.RequestCommandModification:InvokeServer(msg)
+        end
+    end)
+end
+
+local function GetPlayer(name)
+    if not name or name == "" then return nil end
+    name = name:lower()
+    for _, v in ipairs(Players:GetPlayers()) do
+        if v.Name:lower():sub(1, #name) == name or v.DisplayName:lower():sub(1, #name) == name then
+            return v.Name
+        end
+    end
+    return nil
+end
+
+local function BuildAttackMessage(targetFull, useFullName)
+    local targetStr = useFullName and targetFull or targetFull:sub(1,2)
+    local parts = {}
+    for _, cmd in ipairs(HDAdminCommands) do
+        local repeated = ""
+        for i = 1, attackMultiplier do
+            repeated = repeated .. cmd .. targetStr .. " "
+        end
+        table.insert(parts, repeated)
+    end
+    table.insert(parts, ";name " .. targetStr .. " HACKED ")
+    table.insert(parts, ";shirt " .. targetStr .. " 1 ")
+    table.insert(parts, ";pants " .. targetStr .. " 1 ")
+    return table.concat(parts)
+end
+
+local function BuildScreenSpamMessage(targetFull, useFullName)
+    local targetStr = useFullName and targetFull or targetFull:sub(1,2)
+    local parts = {}
+    for _, cmd in ipairs(ScreenSpamCommands) do
+        table.insert(parts, cmd .. targetStr)
+    end
+    table.insert(parts, ";re " .. targetStr)
+    return table.concat(parts, " ")
+end
+
+local function GetProtectionCommands(targetFull)
+    local short = (targetFull == "me") and "me" or targetFull:sub(1,2)
+    local cmds = {
+        ";unpunish "..short, ";unfreeze "..short, ";unjail "..short,
+        ";unblind "..short, ";undog "..short, ";unice "..short,
+        ";unfire "..short, ";unseizure "..short, ";unghost "..short,
+        ";unbigify "..short, ";unsmallify "..short, ";unfatify "..short,
+        ";unwormify "..short, ";unchibify "..short, ";unplushify "..short,
+        ";unfreakify "..short, ";unfrogify "..short, ";unspongify "..short,
+        ";undinofy "..short, ";unbuffify "..short,
+        ";if "..short, ";kit god "..short, ";god "..short, ";ff "..short,
+        ";shield "..short, ";antikick "..short, ";antijail "..short,
+        ";refresh "..short, ";re "..short, ";reset "..short,
+        ";unh "..short, ";unhg "..short, ";unhdg "..short, ";unhb "..short,
+        ";unhdb "..short, ";unhp "..short, ";unhpk "..short, ";unhbk "..short,
+    }
+    return table.concat(cmds, " ")
+end
+
+local function RunChaos(useFullName)
+    local name = TargetInput.Text
+    local target = GetPlayer(name)
+    if target then
+        SendCmd(BuildAttackMessage(target, useFullName))
+    end
+end
+
+local function BringVictimToMe(targetFull)
+    local char = LP.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local pos = char.HumanoidRootPart.Position
+    SendCmd(string.format(";tp %s %d %d %d", targetFull:sub(1,2), pos.X, pos.Y, pos.Z))
+end
+
+local function StartTeleportChaos()
+    if teleportTask then task.cancel(teleportTask) end
+    teleportTask = task.spawn(function()
+        while teleportChaosActive do
+            local target = GetPlayer(TargetInput.Text)
+            if target then BringVictimToMe(target) end
+            task.wait(teleportSpeed)
+        end
+    end)
+end
+
+local function StopTeleportChaos()
+    teleportChaosActive = false
+    if teleportTask then task.cancel(teleportTask) teleportTask = nil end
+end
+
+local function ProtectSelfLoop()
+    while protectSelfActive do
+        SendCmd(GetProtectionCommands("me"))
+        task.wait(0.8)
+    end
+end
+
+local function ProtectOtherLoop()
+    while protectOtherActive do
+        local target = GetPlayer(protectOtherName)
+        if target then
+            SendCmd(GetProtectionCommands(target))
+        end
+        task.wait(0.8)
+    end
+end
+
+local function ScreenSpamLoop()
+    while screenSpamActive do
+        local target = GetPlayer(TargetInput.Text)
+        if target then
+            SendCmd(BuildScreenSpamMessage(target, true))
+        end
+        task.wait(screenSpamSpeed)
+    end
+end
+
+local AttackTab = Instance.new("Frame")
+AttackTab.Name = "Attack"
+AttackTab.Size = UDim2.new(1, 0, 1, 0)
+AttackTab.BackgroundTransparency = 1
+AttackTab.Parent = TabContainer
+TabFrames.Attack = AttackTab
+local attackScroll = createScrollFrame(AttackTab)
+
+CreateTextBox(attackScroll, "أدخل اسم الضحية...").Name = "TargetInput"
+TargetInput = attackScroll.TargetInput
+
+CreateMultiplierSelector(attackScroll, function(val) attackMultiplier = val end)
+
+local fullNameBtn = CreateFullButton(attackScroll, "🚀 قصف شامل (اسم كامل)", Color3.fromRGB(180, 30, 30))
+local shortNameBtn = CreateFullButton(attackScroll, "⚡ قصف شامل (أول حرفين)", Color3.fromRGB(200, 100, 0))
+local autoBtn = CreateFullButton(attackScroll, "🔄 قصف تلقائي: OFF", Color3.fromRGB(80, 20, 20))
+CreateNumberInput(attackScroll, attackRepeatSpeed, "سرعة القصف التلقائي (ثانية):", function(v) attackRepeatSpeed = v end)
+
+local teleportBtn = CreateFullButton(attackScroll, "🌀 نقل متكرر: OFF", Color3.fromRGB(100, 50, 120))
+CreateNumberInput(attackScroll, teleportSpeed, "سرعة النقل (ثانية):", function(v) teleportSpeed = v end)
+
+local teleportOnceBtn = CreateFullButton(attackScroll, "📍 نقل مرة واحدة", Color3.fromRGB(0, 120, 0))
+local spectateBtn = CreateFullButton(attackScroll, "👁️ مراقبة", Color3.fromRGB(150, 110, 0))
+
+fullNameBtn.MouseButton1Click:Connect(function() RunChaos(true) end)
+shortNameBtn.MouseButton1Click:Connect(function() RunChaos(false) end)
+
+local autoTroll = false
+autoBtn.MouseButton1Click:Connect(function()
+    autoTroll = not autoTroll
+    autoBtn.Text = autoTroll and "🔥 قصف تلقائي: ON" or "🔄 قصف تلقائي: OFF"
+    autoBtn.BackgroundColor3 = autoTroll and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(80, 20, 20)
+    task.spawn(function()
+        while autoTroll do
+            RunChaos(true)
+            task.wait(attackRepeatSpeed)
+        end
+    end)
+end)
+
+teleportBtn.MouseButton1Click:Connect(function()
+    teleportChaosActive = not teleportChaosActive
+    if teleportChaosActive then
+        StartTeleportChaos()
+        teleportBtn.Text = "🌀 نقل متكرر: ON"
+        teleportBtn.BackgroundColor3 = Color3.fromRGB(180, 80, 200)
+    else
+        StopTeleportChaos()
+        teleportBtn.Text = "🌀 نقل متكرر: OFF"
+        teleportBtn.BackgroundColor3 = Color3.fromRGB(100, 50, 120)
+    end
+end)
+
+teleportOnceBtn.MouseButton1Click:Connect(function()
+    local target = GetPlayer(TargetInput.Text)
+    if target then
+        local char = LP.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local pos = char.HumanoidRootPart.Position
+            SendCmd(string.format(";tp %s %d %d %d", target:sub(1,2), pos.X, pos.Y, pos.Z))
+        end
+    end
+end)
+
+local spectating = false
+spectateBtn.MouseButton1Click:Connect(function()
+    local tName = GetPlayer(TargetInput.Text)
+    if not tName then return end
+    local plr = Players:FindFirstChild(tName)
+    if not plr or not plr.Character or not plr.Character:FindFirstChild("Humanoid") then return end
+    spectating = not spectating
+    if spectating then
+        workspace.CurrentCamera.CameraSubject = plr.Character.Humanoid
+        spectateBtn.Text = "❌ إيقاف المراقبة"
+        spectateBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    else
+        if LP.Character and LP.Character:FindFirstChild("Humanoid") then
+            workspace.CurrentCamera.CameraSubject = LP.Character.Humanoid
+        end
+        spectateBtn.Text = "👁️ مراقبة"
+        spectateBtn.BackgroundColor3 = Color3.fromRGB(150, 110, 0)
+    end
+end)
+
+local ProtectTab = Instance.new("Frame")
+ProtectTab.Name = "Protect"
+ProtectTab.Size = UDim2.new(1, 0, 1, 0)
+ProtectTab.BackgroundTransparency = 1
+ProtectTab.Parent = TabContainer
+TabFrames.Protect = ProtectTab
+local protectScroll = createScrollFrame(ProtectTab)
+
+local protectSelfBtn = CreateFullButton(protectScroll, "🛡️ حماية نفسي: OFF", Color3.fromRGB(45, 45, 50))
+local OtherProtectInput = CreateTextBox(protectScroll, "أدخل اسم اللاعب لحمايته...")
+local protectOtherBtn = CreateFullButton(protectScroll, "🔰 حماية الآخر: OFF", Color3.fromRGB(45, 45, 50))
+
+protectSelfBtn.MouseButton1Click:Connect(function()
+    protectSelfActive = not protectSelfActive
+    protectSelfBtn.Text = protectSelfActive and "🛡️ حماية نفسي: نشطة" or "🛡️ حماية نفسي: OFF"
+    protectSelfBtn.BackgroundColor3 = protectSelfActive and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(45, 45, 50)
+    if protectSelfActive then task.spawn(ProtectSelfLoop) end
+end)
+
+protectOtherBtn.MouseButton1Click:Connect(function()
+    local name = OtherProtectInput.Text
+    if name == "" then return end
+    protectOtherActive = not protectOtherActive
+    if protectOtherActive then
+        protectOtherName = name
+        protectOtherBtn.Text = "🔰 حماية الآخر: نشطة"
+        protectOtherBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        task.spawn(ProtectOtherLoop)
+    else
+        protectOtherBtn.Text = "🔰 حماية الآخر: OFF"
+        protectOtherBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+        protectOtherName = ""
+    end
+end)
+
+local ScreenSpamTab = Instance.new("Frame")
+ScreenSpamTab.Name = "ScreenSpam"
+ScreenSpamTab.Size = UDim2.new(1, 0, 1, 0)
+ScreenSpamTab.BackgroundTransparency = 1
+ScreenSpamTab.Parent = TabContainer
+TabFrames.ScreenSpam = ScreenSpamTab
+local spamScroll = createScrollFrame(ScreenSpamTab)
+
+local spamBtn = CreateFullButton(spamScroll, "📱 تخريب الشاشة: OFF", Color3.fromRGB(45, 45, 50))
+CreateNumberInput(spamScroll, screenSpamSpeed, "سرعة التكرار (ثانية):", function(v) screenSpamSpeed = v end)
+
+spamBtn.MouseButton1Click:Connect(function()
+    screenSpamActive = not screenSpamActive
+    spamBtn.Text = screenSpamActive and "📱 تخريب الشاشة: ON" or "📱 تخريب الشاشة: OFF"
+    spamBtn.BackgroundColor3 = screenSpamActive and Color3.fromRGB(200, 0, 100) or Color3.fromRGB(45, 45, 50)
+    if screenSpamActive then task.spawn(ScreenSpamLoop) end
+end)
+
+local CustomTab = Instance.new("Frame")
+CustomTab.Name = "Custom"
+CustomTab.Size = UDim2.new(1, 0, 1, 0)
+CustomTab.BackgroundTransparency = 1
+CustomTab.Parent = TabContainer
+TabFrames.Custom = CustomTab
+local customScroll = createScrollFrame(CustomTab)
+
+local CustomCmdInput = CreateTextBox(customScroll, "اكتب الأمر بدون ; ...")
+local sendCmdBtn, loopCmdBtn = CreateDoubleRow(customScroll, "⚡ إرسال", Color3.fromRGB(0, 110, 180), "🔄 تكرار: OFF", Color3.fromRGB(50, 50, 55))
+CreateNumberInput(customScroll, customLoopSpeed, "سرعة التكرار (ثانية):", function(v) customLoopSpeed = v end)
+
+local loopCustom = false
+sendCmdBtn.MouseButton1Click:Connect(function()
+    local cmd = CustomCmdInput.Text
+    if cmd ~= "" then SendCmd(";"..cmd) end
+end)
+loopCmdBtn.MouseButton1Click:Connect(function()
+    loopCustom = not loopCustom
+    loopCmdBtn.Text = loopCustom and "🔄 تكرار: ON" or "🔄 تكرار: OFF"
+    task.spawn(function()
+        while loopCustom do
+            local cmd = CustomCmdInput.Text
+            if cmd ~= "" then SendCmd(";"..cmd) end
+            task.wait(customLoopSpeed)
+        end
+    end)
+end)
+
+switchTab("Attack")
+
+local function ShowNotify(attackerName)
+    local NotifyFrame = Instance.new("Frame")
+    NotifyFrame.Size = UDim2.new(0, 260, 0, 100)
+    NotifyFrame.Position = UDim2.new(0.5, -130, 0.5, -50)
+    NotifyFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    NotifyFrame.BorderSizePixel = 0
+    NotifyFrame.Parent = ScreenGui
+    Instance.new("UICorner", NotifyFrame).CornerRadius = UDim.new(0, 10)
+
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(1, -20, 0.5, 0)
+    txt.Position = UDim2.new(0, 10, 0, 10)
+    txt.Text = "⚠️ تم كشف مهاجم: " .. attackerName .. "\nهل تريد الرد بقسوة؟"
+    txt.TextColor3 = Color3.new(1, 1, 1)
+    txt.Font = Enum.Font.GothamBold
+    txt.TextSize = 12
+    txt.BackgroundTransparency = 1
+    txt.Parent = NotifyFrame
+
+    local YesBtn = Instance.new("TextButton")
+    YesBtn.Size = UDim2.new(0.4, 0, 0.3, 0)
+    YesBtn.Position = UDim2.new(0.08, 0, 0.6, 0)
+    YesBtn.Text = "نعم 🔥"
+    YesBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    YesBtn.TextColor3 = Color3.new(1, 1, 1)
+    YesBtn.Font = Enum.Font.GothamBold
+    YesBtn.Parent = NotifyFrame
+    Instance.new("UICorner", YesBtn).CornerRadius = UDim.new(0, 6)
+
+    local NoBtn = Instance.new("TextButton")
+    NoBtn.Size = UDim2.new(0.4, 0, 0.3, 0)
+    NoBtn.Position = UDim2.new(0.52, 0, 0.6, 0)
+    NoBtn.Text = "لا ❌"
+    NoBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+    NoBtn.TextColor3 = Color3.new(1, 1, 1)
+    NoBtn.Font = Enum.Font.GothamBold
+    NoBtn.Parent = NotifyFrame
+    Instance.new("UICorner", NoBtn).CornerRadius = UDim.new(0, 6)
+
+    YesBtn.MouseButton1Click:Connect(function()
+        TargetInput.Text = attackerName
+        if not protectSelfActive then
+            protectSelfActive = true
+            protectSelfBtn.Text = "🛡️ حماية نفسي: نشطة"
+            protectSelfBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+            task.spawn(ProtectSelfLoop)
+        end
+        if not autoTroll then
+            autoTroll = true
+            autoBtn.Text = "🔥 قصف تلقائي: ON"
+            autoBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        end
+        NotifyFrame:Destroy()
+    end)
+    NoBtn.MouseButton1Click:Connect(function() NotifyFrame:Destroy() end)
+    task.delay(5, function() if NotifyFrame then NotifyFrame:Destroy() end end)
+end
+
+Players.PlayerChatted:Connect(function(_, player, message)
+    if player ~= LP and (message:find(";jail") or message:find(";fling") or message:find(";kill")) then
+        if message:find(LP.Name) or message:find("all") or message:find("others") then
+            ShowNotify(player.Name)
+        end
+    end
+end)
