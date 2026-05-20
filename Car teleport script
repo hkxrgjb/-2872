@@ -1,0 +1,618 @@
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local UIS          = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer  = Players.LocalPlayer
+
+local FLY_SPEED = 80
+local SMOOTH    = 0.10
+
+local flying         = false  -- التعديل الوحيد: الطيران يبدأ معطلاً
+local currentCar     = nil
+local currentBV      = nil
+local savedPlayerPos = nil
+local savedCarPos    = nil
+local isTeleporting  = false
+
+local function cleanup()
+    if currentCar and currentCar.Parent then
+        for _, v in ipairs(currentCar:GetDescendants()) do
+            if v.Name == "FlyBV" then
+                pcall(function() v:Destroy() end)
+            end
+        end
+    end
+    currentCar = nil
+    currentBV  = nil
+end
+
+local function getCarWorldBounds(car)
+    local minX, minY, minZ =  math.huge,  math.huge,  math.huge
+    local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+
+    for _, part in ipairs(car:GetDescendants()) do
+        if part:IsA("BasePart") then
+            local pos  = part.Position
+            local half = part.Size * 0.5
+            minX = math.min(minX, pos.X - half.X)
+            minY = math.min(minY, pos.Y - half.Y)
+            minZ = math.min(minZ, pos.Z - half.Z)
+            maxX = math.max(maxX, pos.X + half.X)
+            maxY = math.max(maxY, pos.Y + half.Y)
+            maxZ = math.max(maxZ, pos.Z + half.Z)
+        end
+    end
+
+    local center = Vector3.new(
+        (minX + maxX) * 0.5,
+        (minY + maxY) * 0.5,
+        (minZ + maxZ) * 0.5
+    )
+    local size = Vector3.new(
+        (maxX - minX) + 6,
+        (maxY - minY) + 6,
+        (maxZ - minZ) + 6
+    )
+    return CFrame.new(center), size
+end
+
+local function getPrimary()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil, nil end
+    local seat = hum.SeatPart
+    if not (seat and seat:IsA("VehicleSeat")) then return nil, nil end
+    local car = seat.Parent
+    local primary = car.PrimaryPart or seat
+    return car, primary, seat
+end
+
+local COLORS = {
+    panel      = Color3.fromRGB(18, 18, 32),
+    header     = Color3.fromRGB(28, 28, 52),
+    accent     = Color3.fromRGB(88, 101, 242),
+    accentDark = Color3.fromRGB(55, 65, 180),
+    green      = Color3.fromRGB(59, 201, 115),
+    red        = Color3.fromRGB(220, 70, 70),
+    orange     = Color3.fromRGB(210, 130, 30),
+    teal       = Color3.fromRGB(30, 160, 200),
+    darkGray   = Color3.fromRGB(45, 45, 65),
+    text       = Color3.fromRGB(220, 220, 240),
+}
+
+local LABELS = {
+    ar = {
+        title       = "✈  طيران السيارة",
+        status_on   = "🟢  مفعّل",
+        status_off  = "🔴  معطّل",
+        fly_on      = "⏹  تعطيل الطيران",
+        fly_off     = "▶  تفعيل الطيران",
+        save_plr    = "📍  حفظ موقعي",
+        tp_plr      = "🌀  انتقال (لاعب)",
+        save_car    = "💾  حفظ موقع السيارة",
+        tp_car      = "🚗  انتقال (بالسيارة)",
+        err_ride    = "❌  اركب سيارة أولاً",
+        err_save    = "❌  احفظ موقعاً أولاً",
+        saved       = "✓  تم الحفظ!",
+        teleporting = "⏳  جاري الانتقال...",
+        locking     = "🔒  تثبيت آمن (1ث)",
+        minimize    = "—",
+        restore     = "❐",
+    },
+    en = {
+        title       = "✈  Car Fly",
+        status_on   = "🟢  Active",
+        status_off  = "🔴  Disabled",
+        fly_on      = "⏹  Disable Flying",
+        fly_off     = "▶  Enable Flying",
+        save_plr    = "📍  Save My Position",
+        tp_plr      = "🌀  Teleport (Player)",
+        save_car    = "💾  Save Car Position",
+        tp_car      = "🚗  Teleport (With Car)",
+        err_ride    = "❌  Ride a car first",
+        err_save    = "❌  Save a position first",
+        saved       = "✓  Saved!",
+        teleporting = "⏳  Teleporting...",
+        locking     = "🔒  Safe Lock (1s)",
+        minimize    = "—",
+        restore     = "❐",
+    },
+}
+
+local function tween(obj, props, duration, style, direction)
+    style     = style     or Enum.EasingStyle.Quart
+    direction = direction or Enum.EasingDirection.Out
+    TweenService:Create(obj, TweenInfo.new(duration or 0.3, style, direction), props):Play()
+end
+
+local function buildUI()
+    if LocalPlayer.PlayerGui:FindFirstChild("CarFlyUI") then
+        LocalPlayer.PlayerGui.CarFlyUI:Destroy()
+    end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name           = "CarFlyUI"
+    gui.ResetOnSpawn   = false
+    gui.DisplayOrder   = 999
+    gui.IgnoreGuiInset = true
+    gui.Parent         = LocalPlayer.PlayerGui
+
+    local langOverlay = Instance.new("Frame")
+    langOverlay.Size                   = UDim2.new(1, 0, 1, 0)
+    langOverlay.BackgroundColor3       = Color3.fromRGB(0, 0, 0)
+    langOverlay.BackgroundTransparency = 0.45
+    langOverlay.ZIndex                 = 50
+    langOverlay.Parent                 = gui
+
+    local langBox = Instance.new("Frame")
+    langBox.Size                   = UDim2.new(0, 290, 0, 0)
+    langBox.AnchorPoint            = Vector2.new(0.5, 0.5)
+    langBox.Position               = UDim2.new(0.5, 0, 0.5, 0)
+    langBox.BackgroundColor3       = COLORS.panel
+    langBox.BackgroundTransparency = 1
+    langBox.BorderSizePixel        = 0
+    langBox.ZIndex                 = 51
+    langBox.Parent                 = gui
+    Instance.new("UICorner", langBox).CornerRadius = UDim.new(0, 20)
+
+    local langStroke = Instance.new("UIStroke", langBox)
+    langStroke.Color     = COLORS.accent
+    langStroke.Thickness = 2
+
+    local langTitle = Instance.new("TextLabel")
+    langTitle.Text               = "اختر اللغة  /  Choose Language"
+    langTitle.Size               = UDim2.new(1, 0, 0, 55)
+    langTitle.Position           = UDim2.new(0, 0, 0, 12)
+    langTitle.BackgroundTransparency = 1
+    langTitle.TextColor3         = COLORS.text
+    langTitle.Font               = Enum.Font.GothamBold
+    langTitle.TextSize           = 15
+    langTitle.ZIndex             = 52
+    langTitle.Parent             = langBox
+
+    local divider = Instance.new("Frame")
+    divider.Size             = UDim2.new(0.8, 0, 0, 1)
+    divider.AnchorPoint      = Vector2.new(0.5, 0)
+    divider.Position         = UDim2.new(0.5, 0, 0, 62)
+    divider.BackgroundColor3 = COLORS.accent
+    divider.BackgroundTransparency = 0.5
+    divider.BorderSizePixel  = 0
+    divider.ZIndex           = 52
+    divider.Parent           = langBox
+
+    local function createLangBtn(text, xPos, color)
+        local btn = Instance.new("TextButton")
+        btn.Text              = text
+        btn.Size              = UDim2.new(0, 115, 0, 50)
+        btn.Position          = UDim2.new(0, xPos, 0, 82)
+        btn.BackgroundColor3  = color
+        btn.TextColor3        = Color3.new(1, 1, 1)
+        btn.Font              = Enum.Font.GothamBold
+        btn.TextSize          = 14
+        btn.BorderSizePixel   = 0
+        btn.AutoButtonColor   = false
+        btn.ZIndex            = 52
+        btn.Parent            = langBox
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
+
+        btn.MouseEnter:Connect(function()
+            tween(btn, {BackgroundColor3 = Color3.fromRGB(
+                math.min(color.R * 255 + 22, 255),
+                math.min(color.G * 255 + 22, 255),
+                math.min(color.B * 255 + 22, 255)
+            )}, 0.15)
+        end)
+        btn.MouseLeave:Connect(function()
+            tween(btn, {BackgroundColor3 = color}, 0.15)
+        end)
+        btn.MouseButton1Down:Connect(function()
+            tween(btn, {BackgroundTransparency = 0.2}, 0.07)
+        end)
+        btn.MouseButton1Up:Connect(function()
+            tween(btn, {BackgroundTransparency = 0}, 0.1)
+        end)
+        return btn
+    end
+
+    local arBtn = createLangBtn("🇸🇦  العربية", 20,  COLORS.accentDark)
+    local enBtn = createLangBtn("🇬🇧  English",  155, COLORS.darkGray)
+
+    tween(langBox, {Size = UDim2.new(0, 290, 0, 155), BackgroundTransparency = 0}, 0.5,
+        Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+    local function buildMainPanel(lang)
+        local L = LABELS[lang]
+
+        tween(langOverlay, {BackgroundTransparency = 1}, 0.3)
+        tween(langBox, {Size = UDim2.new(0, 290, 0, 0), BackgroundTransparency = 1}, 0.35,
+            Enum.EasingStyle.Back, Enum.EasingDirection.In)
+        task.delay(0.4, function()
+            pcall(function() langOverlay:Destroy() end)
+            pcall(function() langBox:Destroy() end)
+        end)
+
+        local fullHeight = 325
+        local minimized  = false
+
+        local panel = Instance.new("Frame")
+        panel.Size                   = UDim2.new(0, 205, 0, 0)
+        panel.AnchorPoint            = Vector2.new(1, 0.5)
+        panel.Position               = UDim2.new(1, -12, 0.5, 0)
+        panel.BackgroundColor3       = COLORS.panel
+        panel.BorderSizePixel        = 0
+        panel.Parent                 = gui
+        Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 16)
+
+        local panelStroke = Instance.new("UIStroke", panel)
+        panelStroke.Color     = COLORS.accent
+        panelStroke.Thickness = 1.5
+
+        local header = Instance.new("Frame")
+        header.Size             = UDim2.new(1, 0, 0, 46)
+        header.BackgroundColor3 = COLORS.header
+        header.BorderSizePixel  = 0
+        header.Parent           = panel
+        Instance.new("UICorner", header).CornerRadius = UDim.new(0, 16)
+
+        local hFix = Instance.new("Frame")
+        hFix.Size             = UDim2.new(1, 0, 0.5, 0)
+        hFix.Position         = UDim2.new(0, 0, 0.5, 0)
+        hFix.BackgroundColor3 = COLORS.header
+        hFix.BorderSizePixel  = 0
+        hFix.Parent           = header
+
+        local accentLine = Instance.new("Frame")
+        accentLine.Size             = UDim2.new(1, 0, 0, 2)
+        accentLine.Position         = UDim2.new(0, 0, 1, -2)
+        accentLine.BackgroundColor3 = COLORS.accent
+        accentLine.BorderSizePixel  = 0
+        accentLine.ZIndex           = 2
+        accentLine.Parent           = header
+
+        local titleLbl = Instance.new("TextLabel")
+        titleLbl.Text                = L.title
+        titleLbl.Size                = UDim2.new(1, -52, 1, 0)
+        titleLbl.Position            = UDim2.new(0, 12, 0, 0)
+        titleLbl.BackgroundTransparency = 1
+        titleLbl.TextColor3          = COLORS.text
+        titleLbl.Font                = Enum.Font.GothamBold
+        titleLbl.TextSize            = 14
+        titleLbl.TextXAlignment      = Enum.TextXAlignment.Left
+        titleLbl.ZIndex              = 3
+        titleLbl.Parent              = header
+
+        local minBtn = Instance.new("TextButton")
+        minBtn.Text              = L.minimize
+        minBtn.Size              = UDim2.new(0, 30, 0, 30)
+        minBtn.Position          = UDim2.new(1, -38, 0.5, -15)
+        minBtn.BackgroundColor3  = COLORS.accent
+        minBtn.TextColor3        = Color3.new(1, 1, 1)
+        minBtn.Font              = Enum.Font.GothamBold
+        minBtn.TextSize          = 16
+        minBtn.BorderSizePixel   = 0
+        minBtn.AutoButtonColor   = false
+        minBtn.ZIndex            = 4
+        minBtn.Parent            = header
+        Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 8)
+
+        minBtn.MouseEnter:Connect(function()
+            tween(minBtn, {BackgroundColor3 = COLORS.accentDark}, 0.15)
+        end)
+        minBtn.MouseLeave:Connect(function()
+            tween(minBtn, {BackgroundColor3 = COLORS.accent}, 0.15)
+        end)
+
+        local content = Instance.new("Frame")
+        content.Size             = UDim2.new(1, 0, 1, -46)
+        content.Position         = UDim2.new(0, 0, 0, 46)
+        content.BackgroundTransparency = 1
+        content.ClipsDescendants = true
+        content.Parent           = panel
+
+        local statusLbl = Instance.new("TextLabel")
+        statusLbl.Size               = UDim2.new(1, -14, 0, 22)
+        statusLbl.Position           = UDim2.new(0, 10, 0, 9)
+        statusLbl.BackgroundTransparency = 1
+        statusLbl.Font               = Enum.Font.Gotham
+        statusLbl.TextSize           = 12
+        statusLbl.TextXAlignment     = Enum.TextXAlignment.Left
+        statusLbl.Parent             = content
+
+        local function createButton(text, yPos, color)
+            local btn = Instance.new("TextButton")
+            btn.Text             = text
+            btn.Size             = UDim2.new(1, -16, 0, 37)
+            btn.Position         = UDim2.new(0, 8, 0, yPos)
+            btn.BackgroundColor3 = color
+            btn.TextColor3       = COLORS.text
+            btn.Font             = Enum.Font.GothamSemibold
+            btn.TextSize         = 12
+            btn.BorderSizePixel  = 0
+            btn.AutoButtonColor  = false
+            btn.Parent           = content
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+            btn.MouseEnter:Connect(function()
+                tween(btn, {BackgroundColor3 = Color3.fromRGB(
+                    math.min(color.R * 255 + 20, 255),
+                    math.min(color.G * 255 + 20, 255),
+                    math.min(color.B * 255 + 20, 255)
+                )}, 0.12)
+                tween(btn, {Size = UDim2.new(1, -10, 0, 37), Position = UDim2.new(0, 5, 0, yPos)}, 0.12)
+            end)
+            btn.MouseLeave:Connect(function()
+                tween(btn, {BackgroundColor3 = color}, 0.12)
+                tween(btn, {Size = UDim2.new(1, -16, 0, 37), Position = UDim2.new(0, 8, 0, yPos)}, 0.12)
+            end)
+            btn.MouseButton1Down:Connect(function()
+                tween(btn, {BackgroundTransparency = 0.25}, 0.07)
+            end)
+            btn.MouseButton1Up:Connect(function()
+                tween(btn, {BackgroundTransparency = 0}, 0.1)
+            end)
+            return btn
+        end
+
+        local function makeDivider(yPos)
+            local d = Instance.new("Frame")
+            d.Size             = UDim2.new(1, -20, 0, 1)
+            d.Position         = UDim2.new(0, 10, 0, yPos)
+            d.BackgroundColor3 = COLORS.darkGray
+            d.BorderSizePixel  = 0
+            d.Parent           = content
+        end
+
+        local toggleBtn  = createButton(L.fly_on,   38,  COLORS.accent)
+        makeDivider(84)
+        local savePlrBtn = createButton(L.save_plr,  93,  COLORS.green)
+        local tpPlrBtn   = createButton(L.tp_plr,    136, COLORS.teal)
+        makeDivider(181)
+        local saveCarBtn = createButton(L.save_car,  190, COLORS.orange)
+        local tpCarBtn   = createButton(L.tp_car,    233, COLORS.red)
+
+        -- تهيئة النصوص والألوان حسب حالة الطيران الابتدائية (مغلق)
+        if flying then
+            statusLbl.Text = L.status_on
+            statusLbl.TextColor3 = COLORS.green
+            toggleBtn.Text = L.fly_on
+            toggleBtn.BackgroundColor3 = COLORS.accent
+        else
+            statusLbl.Text = L.status_off
+            statusLbl.TextColor3 = COLORS.red
+            toggleBtn.Text = L.fly_off
+            toggleBtn.BackgroundColor3 = COLORS.darkGray
+        end
+
+        task.delay(0.45, function()
+            tween(panel, {Size = UDim2.new(0, 205, 0, fullHeight)}, 0.55,
+                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end)
+
+        minBtn.Activated:Connect(function()
+            minimized = not minimized
+            if minimized then
+                minBtn.Text = L.restore
+                tween(panel, {Size = UDim2.new(0, 205, 0, 46)}, 0.35,
+                    Enum.EasingStyle.Quart, Enum.EasingDirection.InOut)
+            else
+                minBtn.Text = L.minimize
+                tween(panel, {Size = UDim2.new(0, 205, 0, fullHeight)}, 0.45,
+                    Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end
+        end)
+
+        toggleBtn.Activated:Connect(function()
+            flying = not flying
+            if flying then
+                toggleBtn.Text = L.fly_on
+                tween(toggleBtn, {BackgroundColor3 = COLORS.accent}, 0.2)
+                statusLbl.Text = L.status_on
+                tween(statusLbl, {TextColor3 = COLORS.green}, 0.2)
+            else
+                toggleBtn.Text = L.fly_off
+                tween(toggleBtn, {BackgroundColor3 = COLORS.darkGray}, 0.2)
+                statusLbl.Text = L.status_off
+                tween(statusLbl, {TextColor3 = COLORS.red}, 0.2)
+                cleanup()
+            end
+        end)
+
+        savePlrBtn.Activated:Connect(function()
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                savedPlayerPos = root.CFrame
+                local orig = savePlrBtn.Text
+                savePlrBtn.Text = L.saved
+                task.delay(1.5, function() savePlrBtn.Text = orig end)
+            end
+        end)
+
+        tpPlrBtn.Activated:Connect(function()
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root and savedPlayerPos then
+                root.CFrame = savedPlayerPos
+            elseif not savedPlayerPos then
+                local orig = tpPlrBtn.Text
+                tpPlrBtn.Text = L.err_save
+                task.delay(1.5, function() tpPlrBtn.Text = orig end)
+            end
+        end)
+
+        saveCarBtn.Activated:Connect(function()
+            local car, primary = getPrimary()
+            if car and primary then
+                savedCarPos = primary.CFrame
+            else
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then savedCarPos = root.CFrame end
+            end
+            if savedCarPos then
+                local orig = saveCarBtn.Text
+                saveCarBtn.Text = L.saved
+                task.delay(1.5, function() saveCarBtn.Text = orig end)
+            end
+        end)
+
+        tpCarBtn.Activated:Connect(function()
+            if isTeleporting then return end
+            local car, primary, seat = getPrimary()
+
+            if not car then
+                local orig = tpCarBtn.Text
+                tpCarBtn.Text = L.err_ride
+                task.delay(1.5, function() tpCarBtn.Text = orig end)
+                return
+            end
+            if not savedCarPos then
+                local orig = tpCarBtn.Text
+                tpCarBtn.Text = L.err_save
+                task.delay(1.5, function() tpCarBtn.Text = orig end)
+                return
+            end
+
+            isTeleporting = true
+            tpCarBtn.Text = L.teleporting
+
+            local wasFlying = flying
+            flying = false
+            if currentBV then currentBV.Velocity = Vector3.new(0,0,0) end
+            task.wait(0.05)
+
+            local boundsCenter, boundsSize = getCarWorldBounds(car)
+
+            local overlapParams = OverlapParams.new()
+            overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+            overlapParams.FilterDescendantsInstances = {car, LocalPlayer.Character}
+
+            local looseParts = workspace:GetPartBoundsInBox(boundsCenter, boundsSize, overlapParams)
+
+            local itemData = {}
+            for _, part in ipairs(looseParts) do
+                if part:IsA("BasePart") and not part.Anchored then
+                    table.insert(itemData, {part = part, offset = primary.CFrame:Inverse() * part.CFrame})
+                    part.Anchored = true
+                end
+            end
+
+            local carParts = {}
+            for _, part in ipairs(car:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    table.insert(carParts, {part = part, originalAnchored = part.Anchored})
+                    part.Anchored = true
+                end
+            end
+
+            car:PivotTo(savedCarPos)
+            task.wait(0.05)
+
+            for _, data in ipairs(itemData) do
+                if data.part.Parent then
+                    data.part.CFrame = primary.CFrame * data.offset
+                end
+            end
+
+            tpCarBtn.Text = L.locking
+            task.wait(1)
+
+            for _, data in ipairs(carParts) do
+                if data.part.Parent then data.part.Anchored = data.originalAnchored end
+            end
+            for _, data in ipairs(itemData) do
+                if data.part.Parent then data.part.Anchored = false end
+            end
+
+            for _, part in ipairs(car:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.AssemblyLinearVelocity  = Vector3.new(0,0,0)
+                    part.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                end
+            end
+
+            flying = wasFlying
+            isTeleporting = false
+            tpCarBtn.Text = L.tp_car
+        end)
+
+        local dragging, dragStart, panelStart = false, nil, nil
+        header.InputBegan:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1
+            or inp.UserInputType == Enum.UserInputType.Touch then
+                dragging   = true
+                dragStart  = inp.Position
+                panelStart = panel.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(inp)
+            if not dragging then return end
+            if inp.UserInputType == Enum.UserInputType.MouseMovement
+            or inp.UserInputType == Enum.UserInputType.Touch then
+                local d = inp.Position - dragStart
+                panel.Position = UDim2.new(
+                    panelStart.X.Scale, panelStart.X.Offset + d.X,
+                    panelStart.Y.Scale, panelStart.Y.Offset + d.Y
+                )
+            end
+        end)
+        UIS.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1
+            or inp.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+
+    arBtn.Activated:Connect(function() buildMainPanel("ar") end)
+    enBtn.Activated:Connect(function() buildMainPanel("en") end)
+end
+
+buildUI()
+
+RunService.RenderStepped:Connect(function()
+    local car, primary, seat = getPrimary()
+
+    if not car then
+        if currentCar then cleanup() end
+        return
+    end
+
+    if not flying or isTeleporting then return end
+
+    if currentCar ~= car then
+        cleanup()
+        currentCar = car
+    end
+
+    if not (currentBV and currentBV.Parent) then
+        local bv = Instance.new("BodyVelocity")
+        bv.Name     = "FlyBV"
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Velocity = Vector3.new(0,0,0)
+        bv.Parent   = primary
+        currentBV   = bv
+    end
+
+    local cam       = workspace.CurrentCamera
+    local lookFull  = cam.CFrame.LookVector
+    local rightFlat = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+    if rightFlat.Magnitude > 0.01 then rightFlat = rightFlat.Unit end
+
+    local targetVel = (lookFull  * seat.Throttle * FLY_SPEED)
+                    + (rightFlat * seat.Steer    * FLY_SPEED)
+
+    currentBV.Velocity = currentBV.Velocity:Lerp(targetVel, SMOOTH)
+end)
+
+RunService.Heartbeat:Connect(function()
+    if not flying or not currentCar or isTeleporting then return end
+    local primary = currentCar.PrimaryPart
+    if not primary then return end
+    local cam      = workspace.CurrentCamera
+    local lookFull = cam.CFrame.LookVector
+    if lookFull.Magnitude < 0.01 then return end
+    local pos = primary.Position
+    primary.CFrame = CFrame.new(pos, pos + lookFull)
+end)
