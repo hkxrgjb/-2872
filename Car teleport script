@@ -22,6 +22,7 @@ local autoTpRunning  = false
 local lastSeat       = nil
 
 local selectMode    = false
+local selectAllMode = false
 local selectedCars  = {}
 local selectedSeats = {}
 local selBoxes      = {}
@@ -436,6 +437,9 @@ local LABELS = {
         auto_off      = "🤖  تفعيل التلقائي",
         select_on     = "✅ إلغاء التحديد",
         select_off    = "☑ وضع التحديد",
+        select_all    = "🌐 تحديد كل القريب",
+        select_all_off = "🌐 إلغاء تحديد الكل",
+        clear_sel     = "🧹 مسح التحديد",
         start_queue   = "🚀 تشغيل الطابور",
         queue_running = "⏳ جاري...",
         no_loc_auto   = "❌ احفظ الموقع",
@@ -462,6 +466,9 @@ local LABELS = {
         auto_off      = "🤖  Enable Auto-TP",
         select_on     = "✅ Exit Select",
         select_off    = "☑ Select Mode",
+        select_all    = "🌐 Select All Nearby",
+        select_all_off = "🌐 Deselect All",
+        clear_sel     = "🧹 Clear Selection",
         start_queue   = "🚀 Start Queue",
         queue_running = "⏳ Running...",
         no_loc_auto   = "❌ No location",
@@ -606,7 +613,7 @@ local function buildUI()
         end)
 
         local PANEL_W    = 262
-        local fullHeight = 335
+        local fullHeight = 385
 
         local panel = Instance.new("Frame")
         panel.Name                   = "MainPanel"
@@ -831,6 +838,13 @@ local function buildUI()
             selectMode and COLORS.green or COLORS.purple)
         local startQueueBtn = createHalfBtn(L.start_queue, 0.5, 2, 240, COLORS.green)
 
+        makeDivider(279)
+
+        local selectAllBtn = createHalfBtn(
+            selectAllMode and L.select_all_off or L.select_all, 0, 8, 284,
+            selectAllMode and COLORS.teal or COLORS.darkGray)
+        local clearSelBtn = createHalfBtn(L.clear_sel, 0.5, 2, 284, COLORS.red)
+
         statusLbl.Text       = flying and L.status_on or L.status_off
         statusLbl.TextColor3 = flying and Color3.fromRGB(50,200,100) or Color3.fromRGB(195,55,55)
 
@@ -1026,6 +1040,23 @@ local function buildUI()
             end
         end)
 
+        selectAllBtn.Activated:Connect(function()
+            selectAllMode = not selectAllMode
+            if selectAllMode then
+                selectAllBtn.Text = L.select_all_off
+                tween(selectAllBtn, {BackgroundColor3=COLORS.teal}, 0.22,
+                    Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+            else
+                selectAllBtn.Text = L.select_all
+                tween(selectAllBtn, {BackgroundColor3=COLORS.darkGray}, 0.22,
+                    Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+            end
+        end)
+
+        clearSelBtn.Activated:Connect(function()
+            clearSelection()
+        end)
+
         startQueueBtn.Activated:Connect(function()
             if autoTpRunning then return end
             if not autoTpLocation then
@@ -1081,8 +1112,25 @@ end
 
 buildUI()
 
+local function getNearbyCars(centerCar)
+    local centerPos = centerCar:GetPivot().Position
+    local radius = 200
+    local nearby = {}
+    local parts = workspace:GetPartBoundsInRadius(centerPos, radius)
+    local seen = {}
+    for _, part in ipairs(parts) do
+        local car = findCarModel(part)
+        if car and car:FindFirstChild("DriveSeat") and not seen[car] then
+            seen[car] = true
+            table.insert(nearby, car)
+        end
+    end
+    return nearby
+end
+
 UIS.InputBegan:Connect(function(inp, gameProcessed)
-    if not selectMode or _isDragging or gameProcessed then return end
+    if _isDragging or gameProcessed then return end
+    if not selectMode and not selectAllMode then return end
     if inp.UserInputType ~= Enum.UserInputType.Touch
     and inp.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 
@@ -1098,6 +1146,40 @@ UIS.InputBegan:Connect(function(inp, gameProcessed)
 
     local carModel = findCarModel(result.Instance)
     if not carModel then return end
+
+    if selectAllMode then
+        local nearby = getNearbyCars(carModel)
+        local allSelected = true
+        for _, car in ipairs(nearby) do
+            if not selectedSeats[car] then
+                allSelected = false
+                break
+            end
+        end
+        if allSelected then
+            for _, car in ipairs(nearby) do
+                for i, c in ipairs(selectedCars) do
+                    if c == car then
+                        table.remove(selectedCars, i)
+                        break
+                    end
+                end
+                unhighlightCar(car)
+                selectedSeats[car] = nil
+            end
+        else
+            for _, car in ipairs(nearby) do
+                if not selectedSeats[car] then
+                    table.insert(selectedCars, car)
+                    highlightCar(car)
+                    selectedSeats[car] = car:FindFirstChild("DriveSeat") or car:FindFirstChildWhichIsA("VehicleSeat")
+                end
+            end
+        end
+        return
+    end
+
+    if not selectMode then return end
 
     local driveSeat = carModel:FindFirstChild("DriveSeat")
     if not driveSeat then return end
