@@ -1,0 +1,190 @@
+-- Sequential Close-Range Herb Farm (Delta Mobile - Guaranteed Distance Check)
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- تحديث شخصية اللاعب تلقائياً عند الموت
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    RootPart = char:WaitForChild("HumanoidRootPart")
+end)
+
+-- تنظيف الواجهة السابقة لمنع التكرار
+if PlayerGui:FindFirstChild("HerbFarmMenu") then
+    PlayerGui.HerbFarmMenu:Destroy()
+end
+
+-- إنشاء واجهة التحكم على الجوال
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "HerbFarmMenu"
+ScreenGui.Parent = PlayerGui
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 240, 0, 165)
+MainFrame.Position = UDim2.new(0.05, 0, 0.2, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 25, 30)
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 12)
+UICorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.BackgroundTransparency = 1
+Title.Text = "🌿 Sequential Close-Range Farm"
+Title.TextColor3 = Color3.fromRGB(150, 255, 150)
+Title.TextSize, Title.Font = 12, Enum.Font.SourceSansBold
+Title.Parent = MainFrame
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0.9, 0, 0, 45)
+ToggleBtn.Position = UDim2.new(0.05, 0, 0.28, 0)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize, ToggleBtn.Font = 14, Enum.Font.SourceSansBold
+ToggleBtn.Text = "الفارم القريب: معطل ❌"
+ToggleBtn.Parent = MainFrame
+
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
+
+-- عداد السرعة (افتراضي 0.2 وتدريج حتى 0.01)
+local currentDelay = 0.2
+
+local SpeedFrame = Instance.new("Frame")
+SpeedFrame.Size = UDim2.new(0.9, 0, 0, 35)
+SpeedFrame.Position = UDim2.new(0.05, 0, 0.62, 0)
+SpeedFrame.BackgroundTransparency = 1
+SpeedFrame.Parent = MainFrame
+
+local MinusBtn = Instance.new("TextButton")
+MinusBtn.Size = UDim2.new(0.25, 0, 1, 0)
+MinusBtn.BackgroundColor3 = Color3.fromRGB(50, 60, 70)
+MinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinusBtn.TextSize, MinusBtn.Font = 16, Enum.Font.SourceSansBold
+MinusBtn.Text = "-"
+MinusBtn.Parent = SpeedFrame
+Instance.new("UICorner", MinusBtn).CornerRadius = UDim.new(0, 6)
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0.48, 0, 1, 0)
+SpeedLabel.Position = UDim2.new(0.26, 0, 0, 0)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+SpeedLabel.TextSize, SpeedLabel.Font = 12, Enum.Font.SourceSansBold
+SpeedLabel.Text = "السرعة: 0.20s"
+SpeedLabel.Parent = SpeedFrame
+
+local PlusBtn = Instance.new("TextButton")
+PlusBtn.Size = UDim2.new(0.25, 0, 1, 0)
+PlusBtn.Position = UDim2.new(0.75, 0, 0, 0)
+PlusBtn.BackgroundColor3 = Color3.fromRGB(50, 60, 70)
+PlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlusBtn.TextSize, PlusBtn.Font = 16, Enum.Font.SourceSansBold
+PlusBtn.Text = "+"
+PlusBtn.Parent = SpeedFrame
+Instance.new("UICorner", PlusBtn).CornerRadius = UDim.new(0, 6)
+
+MinusBtn.MouseButton1Click:Connect(function()
+    currentDelay = math.max(0.01, math.floor((currentDelay - 0.01) * 100 + 0.5) / 100)
+    SpeedLabel.Text = string.format("السرعة: %.2fs", currentDelay)
+end)
+
+PlusBtn.MouseButton1Click:Connect(function()
+    currentDelay = math.min(1.0, math.floor((currentDelay + 0.01) * 100 + 0.5) / 100)
+    SpeedLabel.Text = string.format("السرعة: %.2fs", currentDelay)
+end)
+
+-- دالة استخراج الموقع بدقة
+local function getPosition(target)
+    if not target then return nil end
+    if target:IsA("BasePart") then
+        return target.Position
+    elseif target:IsA("Model") then
+        return target:GetPivot().Position
+    elseif target:IsA("Attachment") then
+        return target.WorldPosition
+    end
+    return nil
+end
+
+local isRunning = false
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    isRunning = not isRunning
+    
+    if isRunning then
+        ToggleBtn.Text = "الفارم القريب: شغال ✅"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+        
+        task.spawn(function()
+            while isRunning do
+                local herbsFolder = Workspace:FindFirstChild("Herbs")
+                
+                if herbsFolder and RootPart and RootPart.Parent then
+                    local activeItems = {}
+                    local currentPos = RootPart.Position
+                    
+                    -- جمع كل النباتات المتاحة من مجلد Herbs
+                    for _, item in ipairs(herbsFolder:GetDescendants()) do
+                        if item:IsA("ProximityPrompt") and item.Enabled then
+                            local pos = getPosition(item.Parent)
+                            if pos then
+                                table.insert(activeItems, {Prompt = item, Pos = pos})
+                            end
+                        end
+                    end
+                    
+                    if #activeItems > 0 then
+                        -- ترتيبها تدريجياً من الأقرب للأبعد
+                        table.sort(activeItems, function(a, b)
+                            return (a.Pos - currentPos).Magnitude < (b.Pos - currentPos).Magnitude
+                        end)
+                        
+                        -- المرور على كل نبتة وزيارتها وجهاً لوجه لضمان توافقها مع شروط اللعبة
+                        for _, data in ipairs(activeItems) do
+                            if not isRunning then break end
+                            local prompt = data.Prompt
+                            local targetPos = data.Pos
+                            
+                            if prompt and prompt.Parent and prompt.Enabled then
+                                -- الانتقال المباشر على النبتة تماماً
+                                if RootPart and RootPart.Parent then
+                                    RootPart.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.5, 0))
+                                end
+                                
+                                prompt.HoldDuration = 0
+                                
+                                -- الضغط المستمر حتى يتم أخذها بالكامل بناءً على السرعة المحددة
+                                local timer = 0
+                                while isRunning and prompt and prompt.Parent and prompt.Enabled and timer < currentDelay do
+                                    if fireproximityprompt then
+                                        fireproximityprompt(prompt)
+                                    end
+                                    timer = timer + 0.03
+                                    task.wait(0.03)
+                                end
+                            end
+                        end
+                    else
+                        task.wait(0.1)
+                    end
+                else
+                    task.wait(0.2)
+                end
+            end
+        end)
+    else
+        ToggleBtn.Text = "الفارم القريب: معطل ❌"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+    end
+end)
