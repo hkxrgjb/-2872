@@ -1,0 +1,469 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RS = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local RootPart  = Character:WaitForChild("HumanoidRootPart")
+local Humanoid  = Character:WaitForChild("Humanoid")
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    RootPart  = char:WaitForChild("HumanoidRootPart")
+    Humanoid  = char:WaitForChild("Humanoid")
+end)
+
+if PlayerGui:FindFirstChild("MobFarmMenu") then
+    PlayerGui.MobFarmMenu:Destroy()
+end
+
+-- ========================
+-- GUI
+-- ========================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name        = "MobFarmMenu"
+ScreenGui.Parent      = PlayerGui
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size            = UDim2.new(0, 240, 0, 225)
+MainFrame.Position        = UDim2.new(0.05, 0, 0.2, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 25, 30)
+MainFrame.Active   = true
+MainFrame.Draggable = true
+MainFrame.Parent   = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+
+local Title = Instance.new("TextLabel")
+Title.Size               = UDim2.new(0.75, 0, 0, 30)
+Title.BackgroundTransparency = 1
+Title.Text   = "⚔️ Always-Teleport Farm"
+Title.TextColor3 = Color3.fromRGB(255, 200, 100)
+Title.TextSize   = 12
+Title.Font       = Enum.Font.SourceSansBold
+Title.Parent     = MainFrame
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size             = UDim2.new(0, 28, 0, 28)
+CloseBtn.Position         = UDim2.new(1, -32, 0, 1)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+CloseBtn.TextColor3 = Color3.fromRGB(255,255,255)
+CloseBtn.TextSize = 14
+CloseBtn.Font     = Enum.Font.SourceSansBold
+CloseBtn.Text     = "✕"
+CloseBtn.Parent   = MainFrame
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size             = UDim2.new(0, 28, 0, 28)
+MinimizeBtn.Position         = UDim2.new(1, -64, 0, 1)
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 70, 80)
+MinimizeBtn.TextColor3 = Color3.fromRGB(255,255,255)
+MinimizeBtn.TextSize = 14
+MinimizeBtn.Font     = Enum.Font.SourceSansBold
+MinimizeBtn.Text     = "–"
+MinimizeBtn.Parent   = MainFrame
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 6)
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Size     = UDim2.new(1, 0, 1, -32)
+ContentFrame.Position = UDim2.new(0, 0, 0, 32)
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Parent = MainFrame
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size             = UDim2.new(0.9, 0, 0, 36)
+ToggleBtn.Position         = UDim2.new(0.05, 0, 0.02, 0)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+ToggleBtn.TextColor3 = Color3.fromRGB(255,255,255)
+ToggleBtn.TextSize = 14
+ToggleBtn.Font     = Enum.Font.SourceSansBold
+ToggleBtn.Text     = "الفارم: معطل ❌"
+ToggleBtn.Parent   = ContentFrame
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
+
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Size     = UDim2.new(0.9, 0, 0, 18)
+InfoLabel.Position = UDim2.new(0.05, 0, 0.22, 0)
+InfoLabel.BackgroundTransparency = 1
+InfoLabel.TextColor3 = Color3.fromRGB(180,180,180)
+InfoLabel.TextSize   = 11
+InfoLabel.Font       = Enum.Font.SourceSans
+InfoLabel.Text       = "المنطقة: --  |  الأعداء: --"
+InfoLabel.Parent     = ContentFrame
+
+-- صفوف التحكم
+local function makeRow(labelTxt, yRatio)
+    local f = Instance.new("Frame")
+    f.Size     = UDim2.new(0.9, 0, 0, 26)
+    f.Position = UDim2.new(0.05, 0, yRatio, 0)
+    f.BackgroundTransparency = 1
+    f.Parent = ContentFrame
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.38, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.fromRGB(200,200,200)
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.SourceSansBold
+    lbl.Text = labelTxt
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = f
+
+    local mBtn = Instance.new("TextButton")
+    mBtn.Size = UDim2.new(0.18, 0, 1, 0)
+    mBtn.Position = UDim2.new(0.38, 0, 0, 0)
+    mBtn.BackgroundColor3 = Color3.fromRGB(50,60,70)
+    mBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    mBtn.TextSize = 14
+    mBtn.Font = Enum.Font.SourceSansBold
+    mBtn.Text = "-"
+    mBtn.Parent = f
+    Instance.new("UICorner", mBtn).CornerRadius = UDim.new(0,5)
+
+    local vLbl = Instance.new("TextLabel")
+    vLbl.Size = UDim2.new(0.26, 0, 1, 0)
+    vLbl.Position = UDim2.new(0.56, 0, 0, 0)
+    vLbl.BackgroundTransparency = 1
+    vLbl.TextColor3 = Color3.fromRGB(255,220,100)
+    vLbl.TextSize = 11
+    vLbl.Font = Enum.Font.SourceSansBold
+    vLbl.Text = "0"
+    vLbl.Parent = f
+
+    local pBtn = Instance.new("TextButton")
+    pBtn.Size = UDim2.new(0.18, 0, 1, 0)
+    pBtn.Position = UDim2.new(0.82, 0, 0, 0)
+    pBtn.BackgroundColor3 = Color3.fromRGB(50,60,70)
+    pBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    pBtn.TextSize = 14
+    pBtn.Font = Enum.Font.SourceSansBold
+    pBtn.Text = "+"
+    pBtn.Parent = f
+    Instance.new("UICorner", pBtn).CornerRadius = UDim.new(0,5)
+
+    return mBtn, vLbl, pBtn
+end
+
+local mH, vH, pH = makeRow("↕ ارتفاع", 0.35)
+local mA, vA, pA = makeRow("⚡ ضرب/ث", 0.55)
+local mR, vR, pR = makeRow("🗺️ المنطقة", 0.75)
+
+vH.Text = "20"
+vA.Text = "0.05s"
+vR.Text = "الكل"
+
+-- ========================
+-- Logic Controls
+-- ========================
+
+local currentHeight      = 20
+local attackInterval     = 0.05
+local selectedRegionName = "الكل"
+local regionIndex        = 1
+
+mH.MouseButton1Click:Connect(function()
+    currentHeight = math.max(1, currentHeight - 1)
+    vH.Text = tostring(currentHeight)
+end)
+pH.MouseButton1Click:Connect(function()
+    currentHeight = math.min(100, currentHeight + 1)
+    vH.Text = tostring(currentHeight)
+end)
+
+mA.MouseButton1Click:Connect(function()
+    attackInterval = math.max(0.01, math.floor((attackInterval - 0.01)*100+0.5)/100)
+    vA.Text = string.format("%.2fs", attackInterval)
+end)
+pA.MouseButton1Click:Connect(function()
+    attackInterval = math.min(2.0, math.floor((attackInterval + 0.01)*100+0.5)/100)
+    vA.Text = string.format("%.2fs", attackInterval)
+end)
+
+local function getRegionNames()
+    local list = {"الكل"}
+    local mobsContainer = Workspace:FindFirstChild("Mobs")
+    if mobsContainer then
+        for _, child in ipairs(mobsContainer:GetChildren()) do
+            table.insert(list, child.Name)
+        end
+    end
+    return list
+end
+
+local function updateRegionUI()
+    local names = getRegionNames()
+    if regionIndex > #names then regionIndex = 1 end
+    if regionIndex < 1 then regionIndex = #names end
+    selectedRegionName = names[regionIndex]
+    vR.Text = selectedRegionName
+end
+
+mR.MouseButton1Click:Connect(function()
+    regionIndex = regionIndex - 1
+    updateRegionUI()
+end)
+
+pR.MouseButton1Click:Connect(function()
+    regionIndex = regionIndex + 1
+    updateRegionUI()
+end)
+
+local isMinimized = false
+MinimizeBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    ContentFrame.Visible = not isMinimized
+    MainFrame.Size = isMinimized
+        and UDim2.new(0,240,0,32)
+        or  UDim2.new(0,240,0,225)
+    MinimizeBtn.Text = isMinimized and "□" or "–"
+end)
+
+-- ========================
+-- Sword Remote
+-- ========================
+
+local ByteNet     = RS:WaitForChild("ByteNetReliable")
+local SWORD_BUF   = buffer.fromstring("!\r\000YWI_k9-Sword1")
+
+-- ========================
+-- Advanced Position Search System
+-- ========================
+
+local regionPositionsCache = {}
+
+local function getAliveMobs(folder)
+    local t = {}
+    for _, desc in ipairs(folder:GetDescendants()) do
+        if desc:IsA("Humanoid") and desc.Health > 0 then
+            local mobModel = desc.Parent
+            if mobModel and mobModel:IsA("Model") then
+                local hrp = mobModel:FindFirstChild("HumanoidRootPart") or mobModel.PrimaryPart
+                if hrp then
+                    table.insert(t, { hum = desc, hrp = hrp })
+                end
+            end
+        end
+    end
+    return t
+end
+
+-- كاشف الإحداثيات المتطور والبحث الشامل
+local function getRegionPosition(folder)
+    local regionName = folder.Name
+
+    -- 1. الذاكرة المؤقتة (إذا تم اكتشاف الموقع سابقاً)
+    if regionPositionsCache[regionName] then
+        return regionPositionsCache[regionName]
+    end
+
+    -- 2. إذا كان هنالك وحوش حية داخل المجلد
+    local alive = getAliveMobs(folder)
+    if #alive > 0 then
+        local sumPos = Vector3.new(0, 0, 0)
+        for _, data in ipairs(alive) do
+            sumPos = sumPos + data.hrp.Position
+        end
+        local pos = sumPos / #alive
+        regionPositionsCache[regionName] = pos
+        return pos
+    end
+
+    -- 3. البحث داخل مجلد المنطقة عن أي أجزاء أو أهداف
+    for _, desc in ipairs(folder:GetDescendants()) do
+        if desc:IsA("BasePart") then
+            regionPositionsCache[regionName] = desc.Position
+            return desc.Position
+        elseif desc:IsA("Attachment") then
+            regionPositionsCache[regionName] = desc.WorldPosition
+            return desc.WorldPosition
+        end
+    end
+
+    if folder:IsA("Model") then
+        local pivot = folder:GetPivot().Position
+        if pivot ~= Vector3.zero then
+            regionPositionsCache[regionName] = pivot
+            return pivot
+        end
+    end
+
+    -- 4. البحث في أرجاء الخريطة كاملة (Workspace) عن أجزاء تحمل نفس اسم المنطقة
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj.Name == regionName then
+            if obj:IsA("BasePart") then
+                regionPositionsCache[regionName] = obj.Position
+                return obj.Position
+            elseif obj:IsA("Model") then
+                local p = obj:GetPivot().Position
+                if p ~= Vector3.zero then
+                    regionPositionsCache[regionName] = p
+                    return p
+                end
+            end
+        end
+    end
+
+    -- 5. فحص الخصائص المخبأة (Attributes)
+    local attrPos = folder:GetAttribute("Position") or folder:GetAttribute("Pos") or folder:GetAttribute("CFrame")
+    if attrPos then
+        local pos = (typeof(attrPos) == "CFrame") and attrPos.Position or attrPos
+        if typeof(pos) == "Vector3" then
+            regionPositionsCache[regionName] = pos
+            return pos
+        end
+    end
+
+    return nil
+end
+
+local function enableFloat()
+    if not RootPart then return end
+    RootPart.Anchored = false
+    
+    local bv = RootPart:FindFirstChild("FarmVelocity")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "FarmVelocity"
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Velocity = Vector3.new(0, 0, 0)
+        bv.Parent = RootPart
+    end
+    
+    local hum = Character and Character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.AutoRotate = false
+        hum.PlatformStand = true
+    end
+end
+
+local function disableFloat()
+    if RootPart then
+        RootPart.Anchored = false
+        local bv = RootPart:FindFirstChild("FarmVelocity")
+        if bv then bv:Destroy() end
+    end
+    
+    local hum = Character and Character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.AutoRotate = true
+        hum.PlatformStand = false
+    end
+end
+
+-- ========================
+-- Farm Loop
+-- ========================
+
+local isRunning  = false
+local farmTask   = nil
+local attackTask = nil
+
+local function stopFarm()
+    isRunning = false
+    if farmTask   then task.cancel(farmTask)   farmTask   = nil end
+    if attackTask then task.cancel(attackTask) attackTask = nil end
+    disableFloat()
+    ToggleBtn.Text             = "الفارم: معطل ❌"
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(220,50,50)
+    InfoLabel.Text             = "المنطقة: --  |  الأعداء: --"
+end
+
+CloseBtn.MouseButton1Click:Connect(function()
+    stopFarm()
+    ScreenGui:Destroy()
+end)
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    if isRunning then stopFarm() return end
+
+    isRunning = true
+    ToggleBtn.Text             = "الفارم: شغال ✅"
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(50,200,50)
+    
+    enableFloat()
+
+    attackTask = task.spawn(function()
+        while isRunning do
+            pcall(function()
+                ByteNet:FireServer(SWORD_BUF)
+            end)
+            task.wait(attackInterval)
+        end
+    end)
+
+    farmTask = task.spawn(function()
+        local autoIndex = 1
+        local emptyTimer = 0
+
+        while isRunning do
+            local mobsContainer = Workspace:FindFirstChild("Mobs")
+            if not mobsContainer or not RootPart or not RootPart.Parent then
+                task.wait(0.1)
+                continue
+            end
+
+            local allRegions = mobsContainer:GetChildren()
+            if #allRegions == 0 then
+                task.wait(0.1)
+                continue
+            end
+
+            local targetRegion = nil
+            if selectedRegionName == "الكل" then
+                if autoIndex > #allRegions then autoIndex = 1 end
+                targetRegion = allRegions[autoIndex]
+            else
+                targetRegion = mobsContainer:FindFirstChild(selectedRegionName)
+            end
+
+            if not targetRegion then
+                task.wait(0.1)
+                continue
+            end
+
+            local regionPos = getRegionPosition(targetRegion)
+            local alive     = getAliveMobs(targetRegion)
+
+            -- عملية النقل الإجباري إذا توفرت الإحداثيات
+            if regionPos and RootPart and RootPart.Parent then
+                local playerPos = regionPos + Vector3.new(0, currentHeight, 0)
+                RootPart.CFrame = CFrame.new(playerPos) * CFrame.Angles(-math.rad(89.9), 0, 0)
+                RootPart.AssemblyLinearVelocity = Vector3.zero
+                RootPart.AssemblyAngularVelocity = Vector3.zero
+
+                task.spawn(function()
+                    pcall(function()
+                        LocalPlayer:RequestStreamAroundAsync(regionPos, 1)
+                    end)
+                end)
+
+                if #alive > 0 then
+                    InfoLabel.Text = targetRegion.Name .. "  |  " .. #alive .. " عدو"
+                    emptyTimer = 0
+                else
+                    InfoLabel.Text = targetRegion.Name .. "  |  (في الموقع - بانتظار الوحوش)"
+                end
+            else
+                -- تنبيه واضح إن كانت المنطقة مجرد مجلد اسمي بدون أي مجسمات مرسبة إطلاقاً
+                InfoLabel.Text = targetRegion.Name .. "  |  ⚠️ يتطلب ظهور وحش لمرة واحدة لحفظ الموقع"
+            end
+
+            -- التنقل التلقائي في وضع الكل
+            if selectedRegionName == "الكل" then
+                if #alive == 0 then
+                    emptyTimer = emptyTimer + 0.1
+                    if emptyTimer >= 3.0 then -- الانتظار 3 ثواني فوق المنطقة الفارغة قبل التبديل
+                        autoIndex = autoIndex + 1
+                        emptyTimer = 0
+                    end
+                end
+            end
+
+            task.wait(0.05)
+        end
+    end)
+end)
