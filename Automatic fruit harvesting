@@ -1,0 +1,354 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    RootPart = char:WaitForChild("HumanoidRootPart")
+end)
+
+if PlayerGui:FindFirstChild("HerbFarmMenu") then
+    PlayerGui.HerbFarmMenu:Destroy()
+end
+
+-- =====================
+-- GUI
+-- =====================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "HerbFarmMenu"
+ScreenGui.Parent = PlayerGui
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 240, 0, 185)
+MainFrame.Position = UDim2.new(0.05, 0, 0.2, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 25, 30)
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(0.75, 0, 0, 30)
+Title.BackgroundTransparency = 1
+Title.Text = "🌿 Sequential Close-Range Farm"
+Title.TextColor3 = Color3.fromRGB(150, 255, 150)
+Title.TextSize = 12
+Title.Font = Enum.Font.SourceSansBold
+Title.Parent = MainFrame
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 28, 0, 28)
+CloseBtn.Position = UDim2.new(1, -32, 0, 1)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 14
+CloseBtn.Font = Enum.Font.SourceSansBold
+CloseBtn.Text = "✕"
+CloseBtn.Parent = MainFrame
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 28, 0, 28)
+MinimizeBtn.Position = UDim2.new(1, -64, 0, 1)
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 70, 80)
+MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeBtn.TextSize = 14
+MinimizeBtn.Font = Enum.Font.SourceSansBold
+MinimizeBtn.Text = "–"
+MinimizeBtn.Parent = MainFrame
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 6)
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Name = "ContentFrame"
+ContentFrame.Size = UDim2.new(1, 0, 1, -32)
+ContentFrame.Position = UDim2.new(0, 0, 0, 32)
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Parent = MainFrame
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0.9, 0, 0, 45)
+ToggleBtn.Position = UDim2.new(0.05, 0, 0.05, 0)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 14
+ToggleBtn.Font = Enum.Font.SourceSansBold
+ToggleBtn.Text = "الفارم القريب: معطل ❌"
+ToggleBtn.Parent = ContentFrame
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
+
+local SpeedFrame = Instance.new("Frame")
+SpeedFrame.Size = UDim2.new(0.9, 0, 0, 35)
+SpeedFrame.Position = UDim2.new(0.05, 0, 0.42, 0)
+SpeedFrame.BackgroundTransparency = 1
+SpeedFrame.Parent = ContentFrame
+
+local MinusBtn = Instance.new("TextButton")
+MinusBtn.Size = UDim2.new(0.25, 0, 1, 0)
+MinusBtn.BackgroundColor3 = Color3.fromRGB(50, 60, 70)
+MinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinusBtn.TextSize = 16
+MinusBtn.Font = Enum.Font.SourceSansBold
+MinusBtn.Text = "-"
+MinusBtn.Parent = SpeedFrame
+Instance.new("UICorner", MinusBtn).CornerRadius = UDim.new(0, 6)
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0.48, 0, 1, 0)
+SpeedLabel.Position = UDim2.new(0.26, 0, 0, 0)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+SpeedLabel.TextSize = 12
+SpeedLabel.Font = Enum.Font.SourceSansBold
+SpeedLabel.Text = "السرعة: 0.10s"
+SpeedLabel.Parent = SpeedFrame
+
+local PlusBtn = Instance.new("TextButton")
+PlusBtn.Size = UDim2.new(0.25, 0, 1, 0)
+PlusBtn.Position = UDim2.new(0.75, 0, 0, 0)
+PlusBtn.BackgroundColor3 = Color3.fromRGB(50, 60, 70)
+PlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlusBtn.TextSize = 16
+PlusBtn.Font = Enum.Font.SourceSansBold
+PlusBtn.Text = "+"
+PlusBtn.Parent = SpeedFrame
+Instance.new("UICorner", PlusBtn).CornerRadius = UDim.new(0, 6)
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(0.9, 0, 0, 20)
+StatusLabel.Position = UDim2.new(0.05, 0, 0.70, 0)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.TextColor3 = Color3.fromRGB(150, 200, 150)
+StatusLabel.TextSize = 11
+StatusLabel.Font = Enum.Font.SourceSans
+StatusLabel.Text = "الأعشاب: --"
+StatusLabel.Parent = ContentFrame
+
+local FireLabel = Instance.new("TextLabel")
+FireLabel.Size = UDim2.new(0.9, 0, 0, 20)
+FireLabel.Position = UDim2.new(0.05, 0, 0.85, 0)
+FireLabel.BackgroundTransparency = 1
+FireLabel.TextColor3 = Color3.fromRGB(200, 180, 100)
+FireLabel.TextSize = 11
+FireLabel.Font = Enum.Font.SourceSans
+FireLabel.Text = "طلبات/عشبة: --"
+FireLabel.Parent = ContentFrame
+
+-- =====================
+-- Logic
+-- =====================
+
+local currentDelay = 0.1
+
+local function updateSpeedLabel()
+    SpeedLabel.Text = string.format("السرعة: %.2fs", currentDelay)
+    _G.HerbFarmDelay = currentDelay
+end
+updateSpeedLabel()
+
+MinusBtn.MouseButton1Click:Connect(function()
+    currentDelay = math.max(0.01, math.floor((currentDelay - 0.01) * 100 + 0.5) / 100)
+    updateSpeedLabel()
+end)
+PlusBtn.MouseButton1Click:Connect(function()
+    currentDelay = math.min(2.0, math.floor((currentDelay + 0.01) * 100 + 0.5) / 100)
+    updateSpeedLabel()
+end)
+
+local isMinimized = false
+MinimizeBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    ContentFrame.Visible = not isMinimized
+    MainFrame.Size = isMinimized
+        and UDim2.new(0, 240, 0, 32)
+        or  UDim2.new(0, 240, 0, 185)
+    MinimizeBtn.Text = isMinimized and "□" or "–"
+end)
+
+local function getPosition(target)
+    if not target then return nil end
+    if target:IsA("BasePart") then return target.Position end
+    if target:IsA("Model") then return target:GetPivot().Position end
+    if target:IsA("Attachment") then return target.WorldPosition end
+    return nil
+end
+
+task.spawn(function()
+    while true do
+        local herbsFolder = Workspace:FindFirstChild("Herbs")
+        if herbsFolder then
+            local count = 0
+            for _, item in ipairs(herbsFolder:GetDescendants()) do
+                if item:IsA("ProximityPrompt") and item.Enabled then
+                    count += 1
+                end
+            end
+            StatusLabel.Text = "الأعشاب: " .. count
+        else
+            StatusLabel.Text = "الأعشاب: --"
+        end
+        task.wait(0.5)
+    end
+end)
+
+local function calcFireCount(delay)
+    if delay >= 0.15 then return 8
+    elseif delay >= 0.10 then return 10
+    elseif delay >= 0.05 then return 15
+    else return 20
+    end
+end
+
+local function fireWave(prompt, totalCount)
+    if not fireproximityprompt then return end
+    local interval = 0.05
+    task.spawn(function()
+        for i = 1, totalCount do
+            if not (prompt and prompt.Parent and prompt.Enabled) then break end
+            fireproximityprompt(prompt)
+            task.wait(interval)
+        end
+    end)
+end
+
+local isRunning = false
+local farmTask  = nil
+
+local function stopFarm()
+    isRunning = false
+    if farmTask then
+        task.cancel(farmTask)
+        farmTask = nil
+    end
+    ToggleBtn.Text = "الفارم القريب: معطل ❌"
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+    FireLabel.Text = "طلبات/عشبة: --"
+end
+
+local function startFarm()
+    if isRunning then return end
+    isRunning = true
+    ToggleBtn.Text = "الفارم القريب: شغال ✅"
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+
+    farmTask = task.spawn(function()
+        while isRunning do
+            local herbsFolder = Workspace:FindFirstChild("Herbs")
+
+            if not herbsFolder or not RootPart or not RootPart.Parent then
+                task.wait(0.2)
+                continue
+            end
+
+            local activeItems = {}
+            for _, item in ipairs(herbsFolder:GetDescendants()) do
+                if item:IsA("ProximityPrompt") and item.Enabled then
+                    local pos = getPosition(item.Parent)
+                    if pos then
+                        table.insert(activeItems, { Prompt = item, Pos = pos })
+                    end
+                end
+            end
+
+            if #activeItems == 0 then
+                task.wait(0.1)
+                continue
+            end
+
+            local currentPos = RootPart.Position
+            table.sort(activeItems, function(a, b)
+                return (a.Pos - currentPos).Magnitude < (b.Pos - currentPos).Magnitude
+            end)
+
+            local useWave = currentDelay <= 0.1
+
+            if useWave then
+                local fireCount = calcFireCount(currentDelay)
+                FireLabel.Text = "🔥 موجة: " .. fireCount .. " طلب"
+            else
+                FireLabel.Text = "⚡ كلاسيك"
+            end
+
+            for i, data in ipairs(activeItems) do
+                if not isRunning then break end
+
+                local prompt    = data.Prompt
+                local targetPos = data.Pos
+
+                if not (prompt and prompt.Parent and prompt.Enabled) then continue end
+                if not (RootPart and RootPart.Parent) then break end
+
+                for j = i + 1, math.min(i + 5, #activeItems) do
+                    local futurePos = activeItems[j].Pos
+                    task.spawn(function()
+                        pcall(function()
+                            LocalPlayer:RequestStreamAroundAsync(futurePos, 2)
+                        end)
+                    end)
+                end
+
+                if useWave then
+                    fireWave(prompt, calcFireCount(currentDelay))
+                    RootPart.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.5, 0))
+                    prompt.HoldDuration = 0
+                    if currentDelay > 0 and isRunning then
+                        task.wait(currentDelay)
+                    end
+                else
+                    RootPart.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.5, 0))
+                    prompt.HoldDuration = 0
+                    local timer = 0
+                    while isRunning and prompt and prompt.Parent and prompt.Enabled and timer < currentDelay do
+                        if fireproximityprompt then
+                            fireproximityprompt(prompt)
+                        end
+                        timer = timer + 0.03
+                        task.wait(0.03)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+CloseBtn.MouseButton1Click:Connect(function()
+    stopFarm()
+    ScreenGui:Destroy()
+end)
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    if isRunning then
+        stopFarm()
+    else
+        startFarm()
+    end
+end)
+
+-- =====================
+-- التشغيل التلقائي مع انتظار 5 ثوانٍ
+-- =====================
+
+task.spawn(function()
+    -- انتظار 5 ثوانٍ لتحميل كل شيء
+    task.wait(5)
+    
+    -- قتل الشخصية
+    local humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.Health = 0
+    end
+    
+    -- الانتظار حتى ترسبن الشخصية من جديد
+    Character = LocalPlayer.CharacterAdded:Wait()
+    RootPart = Character:WaitForChild("HumanoidRootPart")
+    
+    -- بدء الفارم تلقائياً
+    startFarm()
+end)
