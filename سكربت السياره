@@ -1,0 +1,4340 @@
+--[[
+Car Hub Pro — Full Fixed Stable Version
+- Removed broken 90/180 degree mode
+- Default ManualLiftOffset = 0
+- Restored old ground-check behavior, but ignores script utility parts only
+- Fixed ghost preview elevation after transferring cars
+- Full selection cleanup after queue/delete
+- Turbo transfer uses 0.01 delay
+- Renamed to Car Hub Pro with clearer UI names
+]]
+
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local UIS          = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local LP           = Players.LocalPlayer
+
+----------------------------------------------------------------
+-- Global connection guard
+----------------------------------------------------------------
+if _G.CarHubConnections then
+    for _, c in ipairs(_G.CarHubConnections) do
+        pcall(function()
+            c:Disconnect()
+        end)
+    end
+end
+
+_G.CarHubConnections = {}
+
+local function trackGlobal(conn)
+    table.insert(_G.CarHubConnections, conn)
+    return conn
+end
+
+----------------------------------------------------------------
+-- Config / State
+----------------------------------------------------------------
+local Cfg = {
+    FlySpeed         = 80,
+    Smooth           = 0.10,
+    QueueDelay       = 1.0,
+    SlotWidth        = 13,
+    MaxCols          = 15,
+    RowSpacing       = 30,
+    CarsPerRow       = 5,
+    RowDir           = 1,
+    CarFacing        = -1,
+    ManualLiftOffset = -2.55,
+    LivePreview      = false,
+    DeleteCarOnly    = true,
+    DeleteSpeed      = 60,
+    ShowDeleteSpeed  = false,
+    TurboDelay       = 0.01,
+}
+
+local S = {
+    flying               = false,
+    car                  = nil,
+    bv                   = nil,
+    savedPlr             = nil,
+    savedCar             = nil,
+    isTp                 = false,
+    autoEnabled          = false,
+    autoLocation         = nil,
+    carSlots             = {},
+    queueRunning         = false,
+    lastSeat             = nil,
+    selectMode           = false,
+    selectAll            = false,
+    selCars              = {},
+    selSeats             = {},
+    selBoxes             = {},
+    isDragging           = false,
+    frozenParts          = {},
+    frozen               = false,
+    espEnabled           = false,
+    espConns             = {},
+    noclip               = false,
+    seatsHidden          = false,
+    hiddenSeats          = {},
+    carsHidden           = false,
+    hiddenCarsData       = {},
+    ghostEntities        = {},
+    ghostCars            = {},
+    ghostVisible         = false,
+    ghostDirty           = false,
+    turboTransfer        = false,
+    livePreviewConn      = nil,
+    livePreviewActive    = false,
+    lastLiveUpdate       = 0,
+    lastLivePos          = Vector3.zero,
+    deletedCarsData      = {},
+    deleteRunning        = false,
+    deleteQueue          = {},
+    selectionUpdaterConn = nil,
+    uiHeartbeatConn      = nil,
+}
+
+local PAD = {L = -1, R = -1, T = 9, Bo = -3, F = -0.5, Ba = -1}
+
+----------------------------------------------------------------
+-- Folders + cleanup
+----------------------------------------------------------------
+local function makeFolder(parent, name)
+    local f = parent:FindFirstChild(name)
+
+    if f and f:IsA("Folder") then
+        return f
+    end
+
+    if f then
+        pcall(function()
+            f:Destroy()
+        end)
+    end
+
+    local new = Instance.new("Folder")
+    new.Name = name
+    new.Parent = parent
+
+    return new
+end
+
+for _, oldName in ipairs({"CarESP", "_CarFlyGhosts"}) do
+    local old = workspace:FindFirstChild(oldName)
+
+    if old then
+        pcall(function()
+            old:Destroy()
+        end)
+    end
+end
+
+local seatHolder       = makeFolder(LP, "_TempSeats")
+local globalSeatFolder = makeFolder(LP, "_GlobalSeats")
+local espFolder        = makeFolder(workspace, "CarHubESP")
+local ghostFolder      = makeFolder(workspace, "_CarHubGhosts")
+local selectionFolder  = makeFolder(workspace, "_CarHubSelection")
+
+ghostFolder:ClearAllChildren()
+espFolder:ClearAllChildren()
+selectionFolder:ClearAllChildren()
+
+-- Clean old selection parts from previous executions
+pcall(function()
+    for _, inst in ipairs(workspace:GetChildren()) do
+        if inst:IsA("BasePart") then
+            if inst:GetAttribute("CarHubSelection") then
+                inst:Destroy()
+            elseif inst.Name == "SelectionPart" or inst.Name == "CarHubSelectionPart" then
+                if inst.Transparency >= 0.95 and not inst.CanCollide then
+                    inst:Destroy()
+                end
+            end
+        end
+    end
+end)
+
+----------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------
+local function findCar(inst)
+    local c = inst
+
+    while c do
+        if c:IsA("Model") and c:FindFirstChild("DriveSeat") then
+            return c
+        end
+
+        c = c.Parent
+    end
+
+    return nil
+end
+
+local function isOtherCar(part, mine)
+    local c = findCar(part)
+    return c ~= nil and c ~= mine
+end
+
+local function isUtilityHit(hit)
+    if not hit then
+        return false
+    end
+
+    if hit:GetAttribute("CarHubSelection") then
+        return true
+    end
+
+    if hit.Name == "SelectionPart" or hit.Name == "CarHubSelectionPart" then
+        return true
+    end
+
+    if hit.Parent then
+        if selectionFolder and hit:IsDescendantOf(selectionFolder) then
+            return true
+        end
+
+        if ghostFolder and hit:IsDescendantOf(ghostFolder) then
+            return true
+        end
+
+        if espFolder and hit:IsDescendantOf(espFolder) then
+            return true
+        end
+
+        if seatHolder and hit:IsDescendantOf(seatHolder) then
+            return true
+        end
+
+        if globalSeatFolder and hit:IsDescendantOf(globalSeatFolder) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function getGroundY(pos, ignoreCar)
+    local baseFilter = {}
+
+    for _, f in ipairs({ghostFolder, espFolder, seatHolder, globalSeatFolder, selectionFolder}) do
+        if f then
+            table.insert(baseFilter, f)
+        end
+    end
+
+    if LP.Character then
+        table.insert(baseFilter, LP.Character)
+    end
+
+    if ignoreCar and ignoreCar.Parent then
+        table.insert(baseFilter, ignoreCar)
+    end
+
+    for _, c in ipairs(S.selCars) do
+        if c and c.Parent then
+            table.insert(baseFilter, c)
+        end
+    end
+
+    if S.car and S.car.Parent then
+        table.insert(baseFilter, S.car)
+    end
+
+    local extraFilter = {}
+
+    for _ = 1, 8 do
+        local filter = {}
+
+        for _, v in ipairs(baseFilter) do
+            table.insert(filter, v)
+        end
+
+        for _, v in ipairs(extraFilter) do
+            table.insert(filter, v)
+        end
+
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances = filter
+
+        local result = workspace:Raycast(
+            pos + Vector3.new(0, 80, 0),
+            Vector3.new(0, -150, 0),
+            rayParams
+        )
+
+        if not result then
+            return 0
+        end
+
+        local hit = result.Instance
+
+        if not hit then
+            return result.Position.Y
+        end
+
+        if isUtilityHit(hit) then
+            table.insert(extraFilter, hit)
+            continue
+        end
+
+        local hitCar = findCar(hit)
+
+        if hitCar then
+            table.insert(extraFilter, hitCar)
+            continue
+        end
+
+        if hit:IsA("BasePart") and not hit.Anchored then
+            table.insert(extraFilter, hit)
+            continue
+        end
+
+        return result.Position.Y
+    end
+
+    return 0
+end
+
+local function getCarPivotToLowestOffset(car)
+    if not car or not car.Parent then
+        return 5
+    end
+
+    local pivotY = car:GetPivot().Position.Y
+    local lowestY = math.huge
+
+    for _, p in ipairs(car:GetDescendants()) do
+        if p:IsA("BasePart") then
+            local bottom = p.Position.Y - p.Size.Y * 0.5
+
+            if bottom < lowestY then
+                lowestY = bottom
+            end
+        end
+    end
+
+    if lowestY == math.huge then
+        return 5
+    end
+
+    return pivotY - lowestY
+end
+
+local function getBoundsNoMotor(car)
+    local drivenParts = {}
+
+    for _, obj in ipairs(car:GetDescendants()) do
+        if obj:IsA("Motor6D") then
+            if obj.Part0 then
+                drivenParts[obj.Part0] = true
+
+                for _, d in ipairs(obj.Part0:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        drivenParts[d] = true
+                    end
+                end
+            end
+
+            if obj.Part1 then
+                drivenParts[obj.Part1] = true
+
+                for _, d in ipairs(obj.Part1:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        drivenParts[d] = true
+                    end
+                end
+            end
+        elseif obj:IsA("HingeConstraint") or obj:IsA("SpringConstraint") or obj:IsA("PrismaticConstraint") then
+            if obj.Attachment0 and obj.Attachment0.Parent and obj.Attachment0.Parent:IsA("BasePart") then
+                drivenParts[obj.Attachment0.Parent] = true
+            end
+
+            if obj.Attachment1 and obj.Attachment1.Parent and obj.Attachment1.Parent:IsA("BasePart") then
+                drivenParts[obj.Attachment1.Parent] = true
+            end
+        end
+    end
+
+    local ref = car.PrimaryPart
+
+    if not (ref and ref:IsA("BasePart")) then
+        for _, v in ipairs(car:GetDescendants()) do
+            if v:IsA("BasePart") and not drivenParts[v] then
+                ref = v
+                break
+            end
+        end
+    end
+
+    if not ref then
+        return nil, nil
+    end
+
+    local cf = ref.CFrame
+    local mn = Vector3.new(math.huge, math.huge, math.huge)
+    local mx = Vector3.new(-math.huge, -math.huge, -math.huge)
+
+    for _, p in ipairs(car:GetDescendants()) do
+        if p:IsA("BasePart") and not drivenParts[p] then
+            local rc = cf:ToObjectSpace(p.CFrame)
+            local h = p.Size * 0.5
+
+            for sx = -1, 1, 2 do
+                for sy = -1, 1, 2 do
+                    for sz = -1, 1, 2 do
+                        local pt = (rc * CFrame.new(sx * h.X, sy * h.Y, sz * h.Z)).Position
+
+                        mn = Vector3.new(
+                            math.min(mn.X, pt.X),
+                            math.min(mn.Y, pt.Y),
+                            math.min(mn.Z, pt.Z)
+                        )
+
+                        mx = Vector3.new(
+                            math.max(mx.X, pt.X),
+                            math.max(mx.Y, pt.Y),
+                            math.max(mx.Z, pt.Z)
+                        )
+                    end
+                end
+            end
+        end
+    end
+
+    if mn.X == math.huge or mx.X == -math.huge then
+        return nil, nil
+    end
+
+    mn = mn - Vector3.new(PAD.L, PAD.Bo, PAD.F)
+    mx = mx + Vector3.new(PAD.R, PAD.T, PAD.Ba)
+
+    local sz = mx - mn
+
+    if sz.X <= 0 or sz.Y <= 0 or sz.Z <= 0 then
+        return nil, nil
+    end
+
+    return CFrame.new(cf:PointToWorldSpace((mn + mx) * 0.5)) * cf.Rotation, sz
+end
+
+local function getItems(car, prim)
+    if not prim then
+        return {}
+    end
+
+    local dcf, dsz = getBoundsNoMotor(car)
+
+    if not dcf then
+        return {}
+    end
+
+    local op = OverlapParams.new()
+    op.FilterType = Enum.RaycastFilterType.Exclude
+
+    local exclude = {
+        car,
+        ghostFolder,
+        espFolder,
+        seatHolder,
+        globalSeatFolder,
+        selectionFolder,
+    }
+
+    if LP.Character then
+        table.insert(exclude, LP.Character)
+    end
+
+    op.FilterDescendantsInstances = exclude
+
+    local items = {}
+
+    for _, p in ipairs(workspace:GetPartBoundsInBox(dcf, dsz, op)) do
+        if p:IsA("BasePart")
+            and not p.Anchored
+            and not isOtherCar(p, car)
+            and not p:IsDescendantOf(selectionFolder)
+            and not p:GetAttribute("CarHubSelection")
+        then
+            items[#items + 1] = {
+                part = p,
+                off = prim.CFrame:Inverse() * p.CFrame,
+                anchored = p.Anchored,
+            }
+
+            p.Anchored = true
+        end
+    end
+
+    return items
+end
+
+local function closeDoorLeft(car)
+    pcall(function()
+        local paintParts = car:FindFirstChild("PaintParts")
+        if not paintParts then return end
+
+        local doorLeft = paintParts:FindFirstChild("DoorLeft")
+        if not doorLeft then return end
+
+        local hinge = doorLeft:FindFirstChild("ButtonRemote_Hinge")
+        if not hinge then return end
+
+        local rs = game:GetService("ReplicatedStorage")
+        local interaction = rs:FindFirstChild("Interaction")
+        local remote = interaction and interaction:FindFirstChild("RemoteProxy")
+
+        if remote then
+            remote:FireServer(hinge)
+        end
+    end)
+
+    pcall(function()
+        for _, desc in ipairs(car:GetDescendants()) do
+            if desc.Name == "ButtonRemote_Hinge" then
+                local rs = game:GetService("ReplicatedStorage")
+                local interaction = rs:FindFirstChild("Interaction")
+                local remote = interaction and interaction:FindFirstChild("RemoteProxy")
+
+                if remote then
+                    remote:FireServer(desc)
+                end
+            end
+        end
+    end)
+end
+
+local function prepareAndTeleport(car, targetCF, otherCars, includeItems)
+    if includeItems == nil then
+        includeItems = true
+    end
+
+    local primary = car.PrimaryPart
+        or car:FindFirstChild("DriveSeat")
+        or car:FindFirstChildWhichIsA("VehicleSeat")
+
+    if not primary then
+        return false
+    end
+
+    closeDoorLeft(car)
+
+    local itemData = includeItems and getItems(car, primary) or {}
+
+    for _, data in ipairs(itemData) do
+        if data.part and data.part.Parent then
+            data.part.CanCollide = false
+        end
+    end
+
+    local welds = {}
+
+    for _, data in ipairs(itemData) do
+        if data.part and data.part.Parent then
+            local weld = Instance.new("WeldConstraint")
+            weld.Part0 = data.part
+            weld.Part1 = primary
+            weld.Parent = data.part
+            welds[#welds + 1] = weld
+        end
+    end
+
+    local partsData = {}
+
+    for _, p in ipairs(car:GetDescendants()) do
+        if p:IsA("BasePart") then
+            table.insert(partsData, {
+                part = p,
+                anchored = p.Anchored,
+                cancollide = p.CanCollide,
+            })
+
+            p.Anchored = true
+            p.CanCollide = false
+        end
+    end
+
+    local otherStates = {}
+
+    for _, c in ipairs(otherCars or {}) do
+        if c ~= car and c and c.Parent then
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    table.insert(otherStates, {
+                        part = p,
+                        anchored = p.Anchored,
+                    })
+
+                    p.Anchored = true
+                end
+            end
+        end
+    end
+
+    car:PivotTo(targetCF)
+
+    for _, weld in ipairs(welds) do
+        pcall(function()
+            weld:Destroy()
+        end)
+    end
+
+    if primary and primary.Parent then
+        for _, data in ipairs(itemData) do
+            if data.part and data.part.Parent then
+                data.part.CFrame = primary.CFrame * data.off
+                data.part.AssemblyLinearVelocity = Vector3.zero
+                data.part.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+    end
+
+    for _, d in ipairs(partsData) do
+        if d.part and d.part.Parent then
+            d.part.Anchored = d.anchored
+            d.part.CanCollide = d.cancollide
+            d.part.AssemblyLinearVelocity = Vector3.zero
+            d.part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    for _, data in ipairs(itemData) do
+        if data.part and data.part.Parent then
+            data.part.Anchored = data.anchored
+            data.part.CanCollide = true
+        end
+    end
+
+    for _, d in ipairs(otherStates) do
+        if d.part and d.part.Parent then
+            d.part.Anchored = d.anchored
+        end
+    end
+
+    return true
+end
+
+----------------------------------------------------------------
+-- Slot calculation — side mode removed
+----------------------------------------------------------------
+local function computeSlotCF(index, car, overrideLocation)
+    local baseLoc = overrideLocation or S.autoLocation
+
+    if not baseLoc then
+        return nil
+    end
+
+    local col = index % Cfg.CarsPerRow
+    local row = math.floor(index / Cfg.CarsPerRow)
+
+    local basePos = baseLoc.Position
+    local fwd = baseLoc.LookVector
+    local rgt = baseLoc.RightVector
+
+    local posXZ = basePos
+        + rgt * (col * Cfg.SlotWidth)
+        + fwd * (-row * Cfg.RowSpacing * Cfg.RowDir)
+
+    local groundY = getGroundY(posXZ, car)
+    local heightOff = car and getCarPivotToLowestOffset(car) or 5
+    local finalY = groundY + heightOff + Cfg.ManualLiftOffset
+    local finalPos = Vector3.new(posXZ.X, finalY, posXZ.Z)
+
+    if Cfg.CarFacing == -1 then
+        return CFrame.lookAt(finalPos, finalPos - fwd)
+    else
+        return CFrame.lookAt(finalPos, finalPos + fwd)
+    end
+end
+
+local function getSlotCF(car)
+    if not S.autoLocation then
+        return nil
+    end
+
+    if not S.carSlots[car] then
+        local maxSlot = -1
+
+        for _, slot in pairs(S.carSlots) do
+            if slot > maxSlot then
+                maxSlot = slot
+            end
+        end
+
+        S.carSlots[car] = maxSlot + 1
+    end
+
+    return computeSlotCF(S.carSlots[car], car)
+end
+
+local function getPreviewSlotCF(car, tempIndex, overrideLocation)
+    return computeSlotCF(tempIndex, car, overrideLocation)
+end
+
+local function getEffectiveQueueDelay()
+    if S.turboTransfer then
+        return math.max(0.01, Cfg.TurboDelay or 0.01)
+    end
+
+    return math.max(0.03, Cfg.QueueDelay)
+end
+
+local function getDeleteDelay()
+    if S.turboTransfer then
+        return 0.01
+    end
+
+    local d = 15 / math.clamp(Cfg.DeleteSpeed, 10, 500)
+    return math.clamp(d, 0.03, 5)
+end
+
+----------------------------------------------------------------
+-- Ghost preview — fixed pivot correction
+----------------------------------------------------------------
+local function createGhostClone(car, idx)
+    local originalPrimary = nil
+
+    if car.PrimaryPart and car.PrimaryPart:IsA("BasePart") then
+        originalPrimary = car.PrimaryPart
+    end
+
+    if originalPrimary then
+        pcall(function()
+            originalPrimary:SetAttribute("CarHubGhostPrimary", true)
+        end)
+    end
+
+    local clone = car:Clone()
+
+    if originalPrimary then
+        pcall(function()
+            originalPrimary:SetAttribute("CarHubGhostPrimary", nil)
+        end)
+    end
+
+    if not clone then
+        return nil
+    end
+
+    for _, obj in ipairs(clone:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            obj.Anchored = true
+            obj.CanCollide = false
+            obj.Transparency = 0.45
+            obj.CastShadow = false
+        elseif obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+            obj:Destroy()
+        elseif obj:IsA("Humanoid")
+            or obj:IsA("BodyVelocity")
+            or obj:IsA("BodyForce")
+            or obj:IsA("BodyThrust")
+            or obj:IsA("BodyGyro")
+            or obj:IsA("BodyAngularVelocity")
+            or obj:IsA("RocketPropulsion")
+            or obj:IsA("Sound")
+            or obj:IsA("ParticleEmitter")
+            or obj:IsA("Trail")
+            or obj:IsA("Fire")
+            or obj:IsA("Smoke")
+            or obj:IsA("Sparkles")
+            or obj:IsA("Explosion")
+        then
+            obj:Destroy()
+        end
+    end
+
+    local visualPrimary = nil
+
+    if originalPrimary then
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") and d:GetAttribute("CarHubGhostPrimary") then
+                visualPrimary = d
+                break
+            end
+        end
+
+        if not visualPrimary then
+            local byName = clone:FindFirstChild(originalPrimary.Name, true)
+
+            if byName and byName:IsA("BasePart") then
+                visualPrimary = byName
+            end
+        end
+    end
+
+    if not visualPrimary then
+        visualPrimary = clone:FindFirstChildWhichIsA("BasePart")
+    end
+
+    if not visualPrimary then
+        return nil
+    end
+
+    pcall(function()
+        visualPrimary:SetAttribute("CarHubGhostPrimary", nil)
+    end)
+
+    clone.PrimaryPart = visualPrimary
+
+    local originalPivot = car:GetPivot()
+    local clonePivot = clone:GetPivot()
+    local correction = clonePivot:ToObjectSpace(originalPivot)
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 44, 0, 22)
+    bb.StudsOffset = Vector3.new(0, 4, 0)
+    bb.Adornee = visualPrimary
+    bb.AlwaysOnTop = true
+    bb.Parent = clone
+
+    local lbl = Instance.new("TextLabel", bb)
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundColor3 = Color3.fromRGB(10, 6, 22)
+    lbl.BackgroundTransparency = 0.2
+    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 14
+    lbl.Text = "#" .. idx
+
+    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 4)
+
+    return {
+        clone = clone,
+        correction = correction,
+        car = car,
+    }
+end
+
+local function clearGhosts()
+    for _, rec in ipairs(S.ghostEntities) do
+        if rec and rec.clone then
+            pcall(function()
+                rec.clone:Destroy()
+            end)
+        end
+    end
+
+    S.ghostEntities = {}
+    S.ghostCars = {}
+
+    ghostFolder:ClearAllChildren()
+
+    S.ghostVisible = false
+    S.ghostDirty = false
+end
+
+local function buildGhostEntities()
+    for _, rec in ipairs(S.ghostEntities) do
+        if rec and rec.clone then
+            pcall(function()
+                rec.clone:Destroy()
+            end)
+        end
+    end
+
+    S.ghostEntities = {}
+    S.ghostCars = {}
+
+    ghostFolder:ClearAllChildren()
+
+    for idx, car in ipairs(S.selCars) do
+        local ok, rec = pcall(createGhostClone, car, idx)
+
+        if ok and rec and rec.clone then
+            rec.clone.Parent = ghostFolder
+
+            table.insert(S.ghostEntities, rec)
+            table.insert(S.ghostCars, car)
+        else
+            table.insert(S.ghostEntities, false)
+            table.insert(S.ghostCars, car)
+        end
+    end
+end
+
+local function updateGhostTransforms(loc)
+    if not loc or #S.selCars == 0 then
+        return
+    end
+
+    local needBuild = (#S.ghostEntities ~= #S.selCars)
+
+    if not needBuild then
+        for i = 1, #S.selCars do
+            if S.ghostCars[i] ~= S.selCars[i] then
+                needBuild = true
+                break
+            end
+        end
+    end
+
+    if needBuild then
+        buildGhostEntities()
+    end
+
+    for idx, car in ipairs(S.selCars) do
+        local rec = S.ghostEntities[idx]
+
+        if rec and rec.clone and rec.clone.Parent and rec.correction then
+            local tcf = getPreviewSlotCF(car, idx - 1, loc)
+
+            if tcf then
+                pcall(function()
+                    rec.clone:PivotTo(tcf * rec.correction:Inverse())
+                end)
+            end
+        end
+    end
+end
+
+local function placeGhosts(overrideLocation)
+    local loc = overrideLocation or S.autoLocation
+
+    if not loc or #S.selCars == 0 then
+        return
+    end
+
+    S.ghostVisible = true
+    updateGhostTransforms(loc)
+    S.ghostDirty = false
+end
+
+local function stopLivePreview()
+    if S.livePreviewConn then
+        S.livePreviewConn:Disconnect()
+        S.livePreviewConn = nil
+    end
+
+    S.livePreviewActive = false
+    clearGhosts()
+end
+
+local function startLivePreview()
+    if S.livePreviewConn then
+        S.livePreviewConn:Disconnect()
+        S.livePreviewConn = nil
+    end
+
+    clearGhosts()
+
+    if not Cfg.LivePreview then
+        return
+    end
+
+    if #S.selCars == 0 then
+        return
+    end
+
+    S.livePreviewActive = true
+    S.ghostVisible = true
+    S.ghostDirty = true
+
+    local ch = LP.Character
+    local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+    if rt then
+        S.lastLivePos = rt.Position
+        S.lastLiveUpdate = tick()
+        placeGhosts(rt.CFrame)
+    end
+
+    S.livePreviewConn = RunService.Heartbeat:Connect(function()
+        if not Cfg.LivePreview then
+            stopLivePreview()
+            return
+        end
+
+        if S.queueRunning or S.deleteRunning then
+            return
+        end
+
+        local character = LP.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+
+        if not rootPart then
+            return
+        end
+
+        local now = tick()
+        local moved = (rootPart.Position - S.lastLivePos).Magnitude > 0.5
+        local interval = 1
+
+        if moved then
+            interval = 0.1
+            S.lastLivePos = rootPart.Position
+            S.ghostDirty = true
+        end
+
+        if S.ghostDirty or now - S.lastLiveUpdate >= interval then
+            if now - S.lastLiveUpdate >= interval or S.ghostDirty then
+                S.lastLiveUpdate = now
+                placeGhosts(rootPart.CFrame)
+            end
+        end
+    end)
+end
+
+local function refreshGhostPreview()
+    if S.queueRunning or S.deleteRunning then
+        return
+    end
+
+    if #S.selCars == 0 then
+        if S.ghostVisible then
+            clearGhosts()
+        end
+
+        return
+    end
+
+    S.ghostDirty = true
+
+    if Cfg.LivePreview then
+        if not S.livePreviewActive then
+            startLivePreview()
+            return
+        end
+
+        S.ghostVisible = true
+
+        local ch = LP.Character
+        local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+        if rt then
+            placeGhosts(rt.CFrame)
+        end
+    elseif S.ghostVisible then
+        placeGhosts()
+    end
+end
+
+local function toggleGhostPreview()
+    if S.ghostVisible then
+        stopLivePreview()
+        return
+    end
+
+    if not S.autoLocation or #S.selCars == 0 then
+        return
+    end
+
+    S.ghostVisible = true
+    placeGhosts()
+end
+
+----------------------------------------------------------------
+-- Core utility
+----------------------------------------------------------------
+local function getPrimary()
+    local ch = LP.Character
+
+    if not ch then
+        return
+    end
+
+    local hm = ch:FindFirstChildOfClass("Humanoid")
+
+    if not hm then
+        return
+    end
+
+    local st = hm.SeatPart
+
+    if not (st and st:IsA("VehicleSeat")) then
+        return
+    end
+
+    local cr = findCar(st) or st.Parent
+
+    if not (cr and cr:IsA("Model")) then
+        return
+    end
+
+    return cr, cr.PrimaryPart or st, st
+end
+
+local function getSeat(car)
+    return car:FindFirstChild("DriveSeat") or car:FindFirstChildWhichIsA("VehicleSeat")
+end
+
+local function cleanup()
+    if S.car and S.car.Parent then
+        for _, v in ipairs(S.car:GetDescendants()) do
+            if v.Name == "FlyBV" then
+                pcall(function()
+                    v:Destroy()
+                end)
+            end
+        end
+
+        if S.noclip then
+            for _, p in ipairs(S.car:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CanCollide = true
+                end
+            end
+        end
+    end
+
+    S.car = nil
+    S.bv = nil
+end
+
+local function freezeCar(car)
+    S.frozenParts = {}
+
+    for _, p in ipairs(car:GetDescendants()) do
+        if p:IsA("BasePart") then
+            S.frozenParts[#S.frozenParts + 1] = {
+                part = p,
+                was = p.Anchored,
+            }
+
+            p.Anchored = true
+            p.AssemblyLinearVelocity = Vector3.zero
+            p.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    S.frozen = true
+end
+
+local function unfreezeCar()
+    for _, d in ipairs(S.frozenParts) do
+        if d.part and d.part.Parent then
+            d.part.Anchored = d.was
+        end
+    end
+
+    S.frozenParts = {}
+    S.frozen = false
+end
+
+local function clearESP()
+    for _, c in ipairs(S.espConns) do
+        if typeof(c) == "RBXScriptConnection" then
+            c:Disconnect()
+        end
+    end
+
+    S.espConns = {}
+    espFolder:ClearAllChildren()
+end
+
+local function buildESP()
+    clearESP()
+
+    if not S.espEnabled then
+        return
+    end
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("DriveSeat") then
+            local seat = obj.DriveSeat
+
+            local bb = Instance.new("BillboardGui")
+            bb.AlwaysOnTop = true
+            bb.Size = UDim2.new(0, 150, 0, 46)
+            bb.StudsOffset = Vector3.new(0, 5, 0)
+            bb.Adornee = seat
+            bb.Parent = espFolder
+
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1, 0, 1, 0)
+            lbl.BackgroundTransparency = 1
+            lbl.TextColor3 = Color3.fromRGB(180, 140, 255)
+            lbl.TextStrokeTransparency = 0
+            lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+            lbl.Font = Enum.Font.GothamBold
+            lbl.TextSize = 13
+            lbl.TextXAlignment = Enum.TextXAlignment.Center
+            lbl.Parent = bb
+
+            local sb = Instance.new("SelectionBox")
+            sb.Adornee = obj
+            sb.Color3 = Color3.fromRGB(100, 60, 200)
+            sb.LineThickness = 0.04
+            sb.SurfaceTransparency = 0.92
+            sb.SurfaceColor3 = Color3.fromRGB(80, 40, 160)
+            sb.Parent = espFolder
+
+            local name = obj.Name
+
+            local conn = RunService.Heartbeat:Connect(function()
+                local ch = LP.Character
+                local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+                if not rt or not seat.Parent or not lbl.Parent then
+                    return
+                end
+
+                lbl.Text = name .. "\n📍 " .. math.floor((rt.Position - seat.Position).Magnitude) .. "m"
+            end)
+
+            S.espConns[#S.espConns + 1] = conn
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- Selection system
+----------------------------------------------------------------
+local selHighlight, selUnhighlight
+
+local function ensureSelectionUpdater()
+    if S.selectionUpdaterConn then
+        return
+    end
+
+    S.selectionUpdaterConn = RunService.Heartbeat:Connect(function()
+        local now = tick()
+        local anyLeft = false
+
+        for car, d in pairs(S.selBoxes) do
+            anyLeft = true
+
+            if not car or not car.Parent then
+                if d.box then
+                    pcall(function()
+                        d.box:Destroy()
+                    end)
+                end
+
+                if d.part then
+                    pcall(function()
+                        d.part:Destroy()
+                    end)
+                end
+
+                S.selBoxes[car] = nil
+            else
+                local currentCF = car.PrimaryPart and car.PrimaryPart.CFrame or car:GetPivot()
+
+                if (currentCF.Position - d.lastCF.Position).Magnitude > 0.05 then
+                    d.lastCF = currentCF
+                    d.lastMove = now
+                end
+
+                local interval = 1
+
+                if now - d.lastMove < 1 then
+                    interval = 0.1
+                end
+
+                if now - d.lastUpdate >= interval then
+                    d.lastUpdate = now
+
+                    local refCF, refSize = getBoundsNoMotor(car)
+
+                    if refCF then
+                        d.part.Size = refSize
+                        d.part.CFrame = refCF
+                    end
+                end
+            end
+        end
+
+        if not anyLeft and S.selectionUpdaterConn then
+            S.selectionUpdaterConn:Disconnect()
+            S.selectionUpdaterConn = nil
+        end
+    end)
+end
+
+selUnhighlight = function(car)
+    local d = S.selBoxes[car]
+
+    if d then
+        if d.box then
+            pcall(function()
+                d.box:Destroy()
+            end)
+        end
+
+        if d.part then
+            pcall(function()
+                d.part:Destroy()
+            end)
+        end
+
+        S.selBoxes[car] = nil
+    end
+end
+
+selHighlight = function(car)
+    if S.selBoxes[car] then
+        return
+    end
+
+    local boxPart = Instance.new("Part")
+    boxPart.Name = "CarHubSelectionPart"
+    boxPart.Size = Vector3.new(1, 1, 1)
+    boxPart.Transparency = 1
+    boxPart.CanCollide = false
+    boxPart.Anchored = true
+    boxPart:SetAttribute("CarHubSelection", true)
+    boxPart.Parent = selectionFolder
+
+    local sb = Instance.new("SelectionBox")
+    sb.Adornee = boxPart
+    sb.Color3 = Color3.fromRGB(140, 80, 255)
+    sb.LineThickness = 0.07
+    sb.SurfaceTransparency = 0.80
+    sb.SurfaceColor3 = Color3.fromRGB(120, 60, 220)
+    sb.Parent = selectionFolder
+
+    local primary = car.PrimaryPart
+    local currentCF = primary and primary.CFrame or car:GetPivot()
+
+    local refCF, refSize = getBoundsNoMotor(car)
+
+    if refCF then
+        boxPart.Size = refSize
+        boxPart.CFrame = refCF
+    end
+
+    S.selBoxes[car] = {
+        box = sb,
+        part = boxPart,
+        lastCF = currentCF,
+        lastUpdate = tick(),
+        lastMove = tick(),
+    }
+
+    ensureSelectionUpdater()
+end
+
+local function clearSel_()
+    for _, c in ipairs(S.selCars) do
+        selUnhighlight(c)
+        S.selSeats[c] = nil
+    end
+
+    selectionFolder:ClearAllChildren()
+end
+
+local function resetSelectionState()
+    clearSel_()
+
+    S.selCars = {}
+    S.selSeats = {}
+    S.selBoxes = {}
+
+    selectionFolder:ClearAllChildren()
+end
+
+local function clearSel()
+    resetSelectionState()
+end
+
+local function toggleSeats()
+    if S.seatsHidden then
+        for _, data in ipairs(S.hiddenSeats) do
+            if data.seat and data.seat.Parent == globalSeatFolder then
+                data.seat.Parent = data.parent
+            end
+        end
+
+        S.hiddenSeats = {}
+        S.seatsHidden = false
+    else
+        S.hiddenSeats = {}
+
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("VehicleSeat") then
+                if obj.Parent ~= globalSeatFolder and obj.Parent ~= seatHolder then
+                    table.insert(S.hiddenSeats, {
+                        seat = obj,
+                        parent = obj.Parent,
+                    })
+
+                    obj.Parent = globalSeatFolder
+                end
+            end
+        end
+
+        S.seatsHidden = true
+    end
+end
+
+local function toggleCarsVisibility()
+    if S.carsHidden then
+        for _, data in ipairs(S.hiddenCarsData) do
+            if data.part and data.part.Parent then
+                data.part.LocalTransparencyModifier = data.orig
+            end
+        end
+
+        S.hiddenCarsData = {}
+        S.carsHidden = false
+    else
+        S.hiddenCarsData = {}
+
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Model") and (obj:FindFirstChild("DriveSeat") or obj:FindFirstChildWhichIsA("VehicleSeat")) then
+                for _, part in ipairs(obj:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        table.insert(S.hiddenCarsData, {
+                            part = part,
+                            orig = part.LocalTransparencyModifier,
+                        })
+
+                        part.LocalTransparencyModifier = 1
+                    end
+                end
+            end
+        end
+
+        S.carsHidden = true
+    end
+end
+
+----------------------------------------------------------------
+-- Smart delete
+----------------------------------------------------------------
+local DELETE_UNDERGROUND_DEPTH = 800
+
+local function restoreTempSeats(list)
+    for _, d in ipairs(list or {}) do
+        if d.seat and d.seat.Parent == seatHolder then
+            pcall(function()
+                d.seat.Parent = d.par
+            end)
+        end
+    end
+end
+
+local function forceExitSeat(hm, root)
+    if not hm then
+        return
+    end
+
+    local seat = hm.SeatPart
+
+    if seat then
+        for _, obj in ipairs(seat:GetChildren()) do
+            if obj.Name == "SeatWeld" then
+                pcall(function()
+                    obj:Destroy()
+                end)
+            end
+        end
+    end
+
+    if root then
+        for _, obj in ipairs(root:GetChildren()) do
+            if obj.Name == "SeatWeld" then
+                pcall(function()
+                    obj:Destroy()
+                end)
+            end
+        end
+    end
+
+    task.wait(0.05)
+
+    if hm.SeatPart then
+        pcall(function()
+            hm.Sit = false
+        end)
+
+        task.wait(0.05)
+    end
+end
+
+local function transferCarUsingQueueMechanism(car, targetCF, includeItems)
+    if not car or not car.Parent or not targetCF then
+        return false, "Invalid car/target"
+    end
+
+    local ch = LP.Character
+    local hm = ch and ch:FindFirstChildOfClass("Humanoid")
+    local root = ch and ch:FindFirstChild("HumanoidRootPart")
+
+    if not hm then
+        return false, "No Humanoid"
+    end
+
+    local st = car:FindFirstChild("DriveSeat") or car:FindFirstChildWhichIsA("VehicleSeat")
+
+    if not st or not st.Parent then
+        return false, "No valid seat"
+    end
+
+    local originalSeatParent = st.Parent
+    local hiddenSeats = {}
+    local success, lastErr = false, nil
+
+    for _ = 1, 3 do
+        hiddenSeats = {}
+
+        local ok, err = pcall(function()
+            for _, v in ipairs(car:GetDescendants()) do
+                if v:IsA("VehicleSeat") and v ~= st and v.Parent ~= seatHolder then
+                    table.insert(hiddenSeats, {seat = v, par = v.Parent})
+                    v.Parent = seatHolder
+                end
+            end
+
+            if not st.Parent then
+                error("Seat disappeared")
+            end
+
+            st:Sit(hm)
+
+            local waitSit = 0
+            local sitLimit = S.turboTransfer and 0.7 or 1.4
+
+            while waitSit < sitLimit do
+                task.wait(0.03)
+                waitSit += 0.03
+
+                if hm.SeatPart == st then
+                    break
+                end
+            end
+
+            if hm.SeatPart ~= st then
+                error("Failed to sit")
+            end
+
+            local moved = prepareAndTeleport(car, targetCF, {}, includeItems)
+
+            if not moved then
+                error("Car transfer failed")
+            end
+
+            if st and st.Parent then
+                st.Parent = seatHolder
+                table.insert(hiddenSeats, {seat = st, par = originalSeatParent})
+            end
+
+            root = ch and ch:FindFirstChild("HumanoidRootPart")
+            forceExitSeat(hm, root)
+
+            local exitWait = 0
+            local exitLimit = S.turboTransfer and 0.35 or 0.8
+
+            while exitWait < exitLimit do
+                task.wait(0.03)
+                exitWait += 0.03
+
+                if not hm.SeatPart then
+                    break
+                end
+            end
+
+            if hm.SeatPart then
+                pcall(function()
+                    hm.Sit = false
+                end)
+
+                task.wait(0.05)
+            end
+
+            return true
+        end)
+
+        if ok then
+            success = true
+            break
+        end
+
+        lastErr = err
+        restoreTempSeats(hiddenSeats)
+        task.wait(0.12)
+    end
+
+    restoreTempSeats(hiddenSeats)
+
+    return success, lastErr
+end
+
+local function smartDeleteCar(car, speedLbl, onDone)
+    if not car or not car.Parent then
+        if onDone then
+            onDone(false)
+        end
+
+        return
+    end
+
+    if speedLbl and speedLbl.Parent then
+        speedLbl.Text = "0 ⬇"
+    end
+
+    local pivot = car:GetPivot()
+
+    local undergroundCF = CFrame.new(
+        pivot.Position.X,
+        pivot.Position.Y - DELETE_UNDERGROUND_DEPTH,
+        pivot.Position.Z
+    ) * pivot.Rotation
+
+    local includeItems = not Cfg.DeleteCarOnly
+    local moved, err = transferCarUsingQueueMechanism(car, undergroundCF, includeItems)
+
+    if not moved and err then
+        warn("Smart delete failed: " .. tostring(err))
+    end
+
+    if speedLbl and speedLbl.Parent then
+        speedLbl.Text = moved and "✓ ⬇" or "✕"
+    end
+
+    if onDone then
+        onDone(moved)
+    end
+end
+
+local function smartDeleteSelectedCars(speedLbl, onFinish)
+    if #S.selCars == 0 or S.deleteRunning then
+        return
+    end
+
+    S.deleteRunning = true
+    stopLivePreview()
+
+    local toDelete = {table.unpack(S.selCars)}
+    resetSelectionState()
+
+    local idx = 0
+
+    local function doNext()
+        idx += 1
+
+        if idx > #toDelete then
+            S.deleteRunning = false
+
+            if onFinish then
+                onFinish()
+            end
+
+            return
+        end
+
+        local car = toDelete[idx]
+
+        if not car or not car.Parent then
+            doNext()
+            return
+        end
+
+        smartDeleteCar(car, speedLbl, function()
+            task.wait(getDeleteDelay())
+            doNext()
+        end)
+    end
+
+    doNext()
+end
+
+----------------------------------------------------------------
+-- Auto TP + Queue
+----------------------------------------------------------------
+local function doAutoTp(car)
+    if S.queueRunning or not S.autoLocation then
+        return
+    end
+
+    S.queueRunning = true
+
+    local ch = LP.Character
+    local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+    local pre = rt and rt.CFrame
+
+    local tcf = getSlotCF(car)
+
+    if not tcf then
+        S.queueRunning = false
+        return
+    end
+
+    prepareAndTeleport(car, tcf, {}, true)
+
+    local hs = {}
+
+    for _, v in ipairs(car:GetDescendants()) do
+        if v:IsA("VehicleSeat") then
+            hs[#hs + 1] = {seat = v, par = v.Parent}
+            v.Parent = seatHolder
+        end
+    end
+
+    local hm = ch and ch:FindFirstChildOfClass("Humanoid")
+    local root = ch and ch:FindFirstChild("HumanoidRootPart")
+
+    if root and hm then
+        if hm.SeatPart then
+            for _, i in ipairs(hm.SeatPart:GetChildren()) do
+                if i.Name == "SeatWeld" then
+                    i:Destroy()
+                end
+            end
+        end
+
+        for _, i in ipairs(root:GetChildren()) do
+            if i.Name == "SeatWeld" then
+                i:Destroy()
+            end
+        end
+
+        task.wait(0.05)
+
+        if hm.SeatPart and root then
+            root.CFrame = hm.SeatPart.CFrame * CFrame.new(0, 5, 3)
+        end
+    end
+
+    local exitWait = 0
+
+    while exitWait < 1 do
+        task.wait(0.05)
+        exitWait += 0.05
+
+        if ch and ch:FindFirstChildOfClass("Humanoid") and not ch.Humanoid.SeatPart then
+            break
+        end
+    end
+
+    root = ch and ch:FindFirstChild("HumanoidRootPart")
+
+    if root and pre then
+        root.CFrame = pre
+    end
+
+    for _, d in ipairs(hs) do
+        if d.seat and d.seat.Parent == seatHolder then
+            d.seat.Parent = d.par
+        end
+    end
+
+    S.queueRunning = false
+end
+
+local function processQueue(onDone)
+    if S.queueRunning or not S.autoLocation or #S.selCars == 0 then
+        if onDone then
+            onDone(false)
+        end
+
+        return
+    end
+
+    S.queueRunning = true
+    stopLivePreview()
+
+    local ch = LP.Character
+    local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+    local oCF = rt and rt.CFrame
+
+    local queue = {table.unpack(S.selCars)}
+    local qseats = {}
+
+    for _, c in ipairs(queue) do
+        qseats[c] = S.selSeats[c]
+    end
+
+    resetSelectionState()
+
+    local allHS = {}
+    local fast = S.turboTransfer or Cfg.QueueDelay <= 0.05
+
+    for i, car in ipairs(queue) do
+        if not car or not car.Parent then
+            continue
+        end
+
+        local succeeded = false
+        local lastErr = nil
+
+        for _ = 1, 3 do
+            local attemptHS = {}
+
+            local ok, err = pcall(function()
+                local st = qseats[car] or car:FindFirstChild("DriveSeat") or car:FindFirstChildWhichIsA("VehicleSeat")
+
+                if not st or not st.Parent then
+                    error("No valid seat")
+                end
+
+                local hm = ch and ch:FindFirstChildOfClass("Humanoid")
+
+                if not hm then
+                    error("No Humanoid")
+                end
+
+                for _, v in ipairs(car:GetDescendants()) do
+                    if v:IsA("VehicleSeat") and v ~= st then
+                        table.insert(attemptHS, {seat = v, par = v.Parent})
+                        v.Parent = seatHolder
+                    end
+                end
+
+                local root = ch and ch:FindFirstChild("HumanoidRootPart")
+
+                if root and st.Parent then
+                    if (root.Position - st.Position).Magnitude > 8 then
+                        root.CFrame = st.CFrame * CFrame.new(0, 2.5, 0)
+                    end
+                end
+
+                st:Sit(hm)
+
+                local sitWait = 0
+                local sitLimit = fast and 0.7 or 1.4
+
+                while sitWait < sitLimit do
+                    task.wait(0.03)
+                    sitWait += 0.03
+
+                    if hm.SeatPart == st then
+                        break
+                    end
+                end
+
+                if hm.SeatPart ~= st then
+                    error("Failed to sit")
+                end
+
+                local tcf = computeSlotCF(i - 1, car)
+
+                if tcf then
+                    prepareAndTeleport(car, tcf, {}, true)
+                end
+
+                table.insert(attemptHS, {seat = st, par = st.Parent})
+                st.Parent = seatHolder
+
+                root = ch and ch:FindFirstChild("HumanoidRootPart")
+
+                if root and hm.SeatPart then
+                    for _, i2 in ipairs(hm.SeatPart:GetChildren()) do
+                        if i2.Name == "SeatWeld" then
+                            i2:Destroy()
+                        end
+                    end
+
+                    for _, i2 in ipairs(root:GetChildren()) do
+                        if i2.Name == "SeatWeld" then
+                            i2:Destroy()
+                        end
+                    end
+
+                    task.wait(fast and 0.02 or 0.05)
+
+                    if hm.SeatPart and root then
+                        root.CFrame = hm.SeatPart.CFrame * CFrame.new(0, 5, 3)
+                    end
+                end
+
+                local exitWait = 0
+                local exitLimit = fast and 0.35 or 0.8
+
+                while exitWait < exitLimit do
+                    task.wait(0.03)
+                    exitWait += 0.03
+
+                    if not hm.SeatPart then
+                        break
+                    end
+                end
+
+                for _, v in ipairs(attemptHS) do
+                    allHS[#allHS + 1] = v
+                end
+
+                return true
+            end)
+
+            if ok then
+                succeeded = true
+                break
+            else
+                lastErr = err
+
+                for _, v in ipairs(attemptHS) do
+                    if v.seat and v.seat.Parent == seatHolder then
+                        v.seat.Parent = v.par
+                    end
+                end
+
+                task.wait(0.12)
+            end
+        end
+
+        if not succeeded then
+            warn("Queue car failed after 3 retries: " .. tostring(lastErr))
+        end
+
+        task.wait(getEffectiveQueueDelay())
+    end
+
+    for _, d in ipairs(allHS) do
+        if d.seat and d.seat.Parent == seatHolder then
+            d.seat.Parent = d.par
+        end
+    end
+
+    if oCF and ch and ch:FindFirstChild("HumanoidRootPart") then
+        ch.HumanoidRootPart.CFrame = oCF
+    end
+
+    S.carSlots = {}
+    S.queueRunning = false
+    S.lastSeat = nil
+
+    if onDone then
+        onDone(true)
+    end
+end
+
+----------------------------------------------------------------
+-- UI data
+----------------------------------------------------------------
+local C = {
+    bg0 = Color3.fromRGB(6, 6, 14),
+    bg1 = Color3.fromRGB(10, 10, 22),
+    bg2 = Color3.fromRGB(14, 14, 30),
+    bg3 = Color3.fromRGB(18, 18, 36),
+    bg4 = Color3.fromRGB(22, 22, 44),
+    acc = Color3.fromRGB(100, 55, 210),
+    accHov = Color3.fromRGB(120, 70, 235),
+    accDim = Color3.fromRGB(55, 30, 115),
+    accGlow = Color3.fromRGB(140, 90, 255),
+    txtW = Color3.fromRGB(240, 238, 255),
+    txtL = Color3.fromRGB(200, 195, 240),
+    txtM = Color3.fromRGB(150, 145, 190),
+    txtD = Color3.fromRGB(90, 88, 130),
+    green = Color3.fromRGB(22, 160, 80),
+    greenH = Color3.fromRGB(30, 200, 100),
+    red = Color3.fromRGB(180, 30, 50),
+    redH = Color3.fromRGB(210, 45, 65),
+    orange = Color3.fromRGB(180, 95, 15),
+    orangeH = Color3.fromRGB(210, 115, 25),
+    teal = Color3.fromRGB(12, 130, 160),
+    tealH = Color3.fromRGB(18, 160, 195),
+    sep = Color3.fromRGB(25, 24, 50),
+    badge = Color3.fromRGB(30, 28, 60),
+    purple2 = Color3.fromRGB(90, 20, 160),
+}
+
+local TR = {
+    ar = {
+        title = "🚗 Car Hub Pro",
+        tabs = {"✈ الطيران", "📍 الانتقال", "🚙 الركن", "⚙ الإعدادات"},
+
+        f_on = "⏹ إيقاف الطيران",
+        f_off = "▶ تشغيل الطيران",
+        s_on = "● الطيران نشط",
+        s_off = "● الطيران متوقف",
+
+        spd = "سرعة الطيران",
+        smt = "نعومة حركة الطيران",
+        ud_info = "Space/Q للصعود • Shift/E للنزول",
+
+        noclip = "اختراق الجدران (Noclip)",
+        frz = "🔒 تجميد السيارة الحالية",
+        unfrz = "🔓 إلغاء تجميد السيارة",
+
+        sv_p = "📍 حفظ موقعي الحالي",
+        tp_p = "🌀 الانتقال إلى الموقع المحفوظ",
+
+        sv_c = "💾 حفظ موقع السيارة",
+        tp_c = "🚗 نقل السيارة إلى الموقع المحفوظ",
+        tp_c2p = "🎯 نقل السيارة إليّ",
+        tp_p2c = "👤 الانتقال إلى السيارة المحفوظة",
+
+        svloc = "📌 حفظ مكان الركن من موقفي",
+        a_on = "⏹ إيقاف الركن التلقائي",
+        a_off = "🤖 تفعيل الركن التلقائي",
+
+        sm_on = "✅ إنهاء وضع التحديد",
+        sm_off = "☑ تحديد سيارة بالضغط",
+        sa = "🌐 تحديد السيارات القريبة",
+        dsa = "🌐 إلغاء تحديد القريبة",
+        clr = "🧹 مسح التحديد",
+
+        stq = "🚀 بدء ركن السيارات",
+        qrun = "⏳ جاري الركن...",
+        dly = "⏱ زمن الانتظار بين السيارات",
+
+        esp = "إظهار معلومات السيارات (ESP) 👁",
+        grav = "الجاذبية",
+        grst = "↺ إعادة تعيين الجاذبية",
+
+        slw = "المسافة بين السيارات",
+        rsp = "المسافة بين الصفوف",
+        cprLabel = "عدد السيارات في كل صف",
+
+        rowDirL = "اتجاه الصفوف",
+        rdFront = "⬆ أمام نقطة الركن",
+        rdBack = "⬇ خلف نقطة الركن",
+
+        cfLabel = "اتجاه واجهة السيارة",
+        cfFwd = "⬆ للأمام",
+        cfBack = "⬇ للخلف",
+
+        prevQ = "🔍 عرض معاينة الأماكن",
+        prevQOff = "❌ إخفاء المعاينة",
+
+        seatTgl = "🚫 إخفاء المقاعد",
+        seatTglOn = "✅ إظهار المقاعد",
+
+        carHide = "👁 إخفاء السيارات",
+        carShow = "👁 إظهار السيارات",
+
+        qSettings = "⚙ إعدادات الركن",
+
+        turbo = "⚡ نقل فائق السرعة (Turbo)",
+        turboOn = "⚡ النقل الفائق مفعل",
+        turboWarn = "السرعة تصبح 0.01 ثانية تقريباً، قد يسبب مشاكل في الأغراض",
+
+        saved = "✓ تم الحفظ!",
+        going = "⏳ جاري...",
+        e_ride = "❌ اركب سيارة أولاً",
+        e_save = "❌ احفظ موقعاً أولاً",
+        svd = "✓ تم!",
+        nloc = "❌ احفظ مكان الركن أولاً",
+        ncars = "❌ حدد سيارات أولاً",
+
+        selcount = "المحدد",
+        cars_ = "سيارة/سيارات",
+
+        coord_p = "موقع اللاعب",
+        coord_c = "موقع السيارة",
+        close = "✕",
+
+        flySection = "── التحكم بالطيران ──",
+        tpSection = "── انتقال اللاعب ──",
+        carSection = "── انتقال السيارة ──",
+        utilSection = "── أدوات إضافية ──",
+
+        manLift = "رفع/خفض مكان الركن يدوياً",
+
+        selSection = "── تحديد السيارات ──",
+        previewSection = "── معاينة أماكن الركن ──",
+        rowDirSection = "── اتجاه الصفوف ──",
+        carFaceSection = "── اتجاه واجهة السيارة ──",
+
+        livePreview = "👁 معاينة حية (تتبع موقعي)",
+
+        deleteCar = "🗑️ حذف السيارات المحددة",
+        deleteWarn = "يركب السيارة ← ينقلها تحت الأرض ← ينتقل للتالية",
+        deleteSec = "── الحذف الذكي ──",
+        deleteSpeed = "سرعة الحذف",
+        deleteRunning = "⏳ جاري الحذف...",
+        deleteMode = "وضع الحذف",
+        deleteOnly = "🚗 حذف السيارة فقط",
+        deleteWithItems = "📦 حذف السيارة + الأغراض",
+
+        gatherSection = "── نقطة الركن ──",
+    },
+
+    en = {
+        title = "🚗 Car Hub Pro",
+        tabs = {"✈ Fly", "📍 Teleport", "🚙 Parking", "⚙ Settings"},
+
+        f_on = "⏹ Stop Flying",
+        f_off = "▶ Start Flying",
+        s_on = "● Flying Active",
+        s_off = "● Flying Disabled",
+
+        spd = "Flight Speed",
+        smt = "Flight Smoothness",
+        ud_info = "Space/Q Up • Shift/E Down",
+
+        noclip = "Noclip (Pass Through Walls)",
+        frz = "🔒 Freeze Current Car",
+        unfrz = "🔓 Unfreeze Car",
+
+        sv_p = "📍 Save My Position",
+        tp_p = "🌀 Teleport to Saved Position",
+
+        sv_c = "💾 Save Car Position",
+        tp_c = "🚗 Move Car to Saved Position",
+        tp_c2p = "🎯 Move Car to Me",
+        tp_p2c = "👤 Teleport Me to Saved Car",
+
+        svloc = "📌 Save Parking Point From My Position",
+        a_on = "⏹ Disable Auto Parking",
+        a_off = "🤖 Enable Auto Parking",
+
+        sm_on = "✅ Exit Selection Mode",
+        sm_off = "☑ Select Car by Clicking",
+        sa = "🌐 Select Nearby Cars",
+        dsa = "🌐 Deselect Nearby Cars",
+        clr = "🧹 Clear Selection",
+
+        stq = "🚀 Start Parking Queue",
+        qrun = "⏳ Parking...",
+        dly = "⏱ Delay Between Cars",
+
+        esp = "Show Car Info (ESP) 👁",
+        grav = "Gravity",
+        grst = "↺ Reset Gravity",
+
+        slw = "Distance Between Cars",
+        rsp = "Distance Between Rows",
+        cprLabel = "Cars Per Row",
+
+        rowDirL = "Row Direction",
+        rdFront = "⬆ In Front of Parking Point",
+        rdBack = "⬇ Behind Parking Point",
+
+        cfLabel = "Car Facing Direction",
+        cfFwd = "⬆ Forward",
+        cfBack = "⬇ Backward",
+
+        prevQ = "🔍 Show Parking Preview",
+        prevQOff = "❌ Hide Preview",
+
+        seatTgl = "🚫 Hide Seats",
+        seatTglOn = "✅ Show Seats",
+
+        carHide = "👁 Hide Cars",
+        carShow = "👁 Show Cars",
+
+        qSettings = "⚙ Parking Settings",
+
+        turbo = "⚡ Turbo Transfer",
+        turboOn = "⚡ Turbo Transfer ON",
+        turboWarn = "Turbo uses ~0.01s delay and may cause item issues",
+
+        saved = "✓ Saved!",
+        going = "⏳ Working...",
+        e_ride = "❌ Ride a car first",
+        e_save = "❌ Save a position first",
+        svd = "✓ Done!",
+        nloc = "❌ Save parking point first",
+        ncars = "❌ Select cars first",
+
+        selcount = "Selected",
+        cars_ = "Car(s)",
+
+        coord_p = "Player Position",
+        coord_c = "Car Position",
+        close = "✕",
+
+        flySection = "── Flight Controls ──",
+        tpSection = "── Player Teleport ──",
+        carSection = "── Car Teleport ──",
+        utilSection = "── Utilities ──",
+
+        manLift = "Manual Parking Height Offset",
+
+        selSection = "── Car Selection ──",
+        previewSection = "── Parking Preview ──",
+        rowDirSection = "── Row Direction ──",
+        carFaceSection = "── Car Facing ──",
+
+        livePreview = "👁 Live Preview (Follows Me)",
+
+        deleteCar = "🗑️ Delete Selected Cars",
+        deleteWarn = "Sits in car → moves it underground → goes to next car",
+        deleteSec = "── Smart Delete ──",
+        deleteSpeed = "Delete Speed",
+        deleteRunning = "⏳ Deleting...",
+        deleteMode = "Delete Mode",
+        deleteOnly = "🚗 Delete Car Only",
+        deleteWithItems = "📦 Delete Car + Items",
+
+        gatherSection = "── Parking Point ──",
+    },
+}
+
+----------------------------------------------------------------
+-- Animation / UI helpers
+----------------------------------------------------------------
+local function tw(obj, props, dur, style, dir)
+    local ti = TweenInfo.new(
+        dur or 0.25,
+        style or Enum.EasingStyle.Quint,
+        dir or Enum.EasingDirection.Out
+    )
+
+    TweenService:Create(obj, ti, props):Play()
+end
+
+local function btnPunch(btn)
+    local origSize = btn.Size
+
+    local punchW = origSize.X.Offset * 0.94
+    local punchH = origSize.Y.Offset * 0.90
+
+    tw(btn, {Size = UDim2.new(origSize.X.Scale, punchW, origSize.Y.Scale, punchH)}, 0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+    task.delay(0.08, function()
+        if btn and btn.Parent then
+            tw(btn, {Size = origSize}, 0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end
+    end)
+end
+
+local function spawnRipple(btn, inputPos)
+    pcall(function()
+        local rip = Instance.new("Frame")
+        rip.AnchorPoint = Vector2.new(0.5, 0.5)
+        rip.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        rip.BackgroundTransparency = 0.72
+        rip.BorderSizePixel = 0
+        rip.ZIndex = btn.ZIndex + 10
+        rip.ClipsDescendants = false
+        rip.Parent = btn
+
+        local babs = btn.AbsolutePosition
+        local bsz = btn.AbsoluteSize
+
+        local relX = math.clamp(inputPos.X - babs.X, 0, bsz.X)
+        local relY = math.clamp(inputPos.Y - babs.Y, 0, bsz.Y)
+
+        local rx = relX / bsz.X
+        local ry = relY / bsz.Y
+
+        rip.Position = UDim2.new(rx, 0, ry, 0)
+        rip.Size = UDim2.new(0, 2, 0, 2)
+
+        Instance.new("UICorner", rip).CornerRadius = UDim.new(1, 0)
+
+        local maxDim = math.max(bsz.X, bsz.Y) * 2.6
+
+        tw(rip, {
+            Size = UDim2.new(0, maxDim, 0, maxDim),
+            BackgroundTransparency = 1,
+        }, 0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+        task.delay(0.52, function()
+            pcall(function()
+                rip:Destroy()
+            end)
+        end)
+    end)
+end
+
+local function lighten(col, amt)
+    amt = amt or 25
+
+    return Color3.fromRGB(
+        math.min(col.R * 255 + amt, 255),
+        math.min(col.G * 255 + amt, 255),
+        math.min(col.B * 255 + amt, 255)
+    )
+end
+
+local function fmtPos(cf)
+    if not cf then
+        return "—"
+    end
+
+    local p = cf.Position
+
+    return string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z)
+end
+
+local function addGlow(obj, col, thickness)
+    local s = Instance.new("UIStroke", obj)
+    s.Color = col or C.acc
+    s.Thickness = thickness or 1
+    s.Transparency = 0.5
+    return s
+end
+
+----------------------------------------------------------------
+-- Build UI
+----------------------------------------------------------------
+local function buildUI()
+    if S.uiHeartbeatConn then
+        pcall(function()
+            S.uiHeartbeatConn:Disconnect()
+        end)
+
+        S.uiHeartbeatConn = nil
+    end
+
+    for _, n in ipairs({"CarHubUI", "CarFlyUI"}) do
+        local old = LP.PlayerGui:FindFirstChild(n)
+
+        if old then
+            pcall(function()
+                old:Destroy()
+            end)
+        end
+    end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "CarHubUI"
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = LP.PlayerGui
+
+    local overlay = Instance.new("Frame")
+    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+    overlay.BackgroundTransparency = 0.5
+    overlay.ZIndex = 50
+    overlay.Parent = gui
+
+    local langBox = Instance.new("Frame")
+    langBox.Size = UDim2.new(0, 280, 0, 0)
+    langBox.AnchorPoint = Vector2.new(0.5, 0.5)
+    langBox.Position = UDim2.new(0.5, 0, 0.5, 0)
+    langBox.BackgroundColor3 = C.bg1
+    langBox.BackgroundTransparency = 1
+    langBox.BorderSizePixel = 0
+    langBox.ZIndex = 51
+    langBox.Parent = gui
+
+    Instance.new("UICorner", langBox).CornerRadius = UDim.new(0, 18)
+    addGlow(langBox, C.acc, 2)
+
+    local langHdr = Instance.new("Frame")
+    langHdr.Size = UDim2.new(1, 0, 0, 50)
+    langHdr.BackgroundColor3 = C.bg2
+    langHdr.BorderSizePixel = 0
+    langHdr.ZIndex = 52
+    langHdr.Parent = langBox
+
+    Instance.new("UICorner", langHdr).CornerRadius = UDim.new(0, 18)
+
+    local hdrFix = Instance.new("Frame")
+    hdrFix.Size = UDim2.new(1, 0, 0.5, 0)
+    hdrFix.Position = UDim2.new(0, 0, 0.5, 0)
+    hdrFix.BackgroundColor3 = C.bg2
+    hdrFix.BorderSizePixel = 0
+    hdrFix.ZIndex = 52
+    hdrFix.Parent = langHdr
+
+    local langTitle = Instance.new("TextLabel")
+    langTitle.Text = "🚗 Car Hub Pro"
+    langTitle.Size = UDim2.new(1, 0, 1, 0)
+    langTitle.BackgroundTransparency = 1
+    langTitle.TextColor3 = C.txtW
+    langTitle.Font = Enum.Font.GothamBold
+    langTitle.TextSize = 15
+    langTitle.ZIndex = 53
+    langTitle.Parent = langHdr
+
+    local accentLine = Instance.new("Frame")
+    accentLine.Size = UDim2.new(1, 0, 0, 2)
+    accentLine.Position = UDim2.new(0, 0, 1, -2)
+    accentLine.BackgroundColor3 = C.acc
+    accentLine.BorderSizePixel = 0
+    accentLine.ZIndex = 53
+    accentLine.Parent = langHdr
+
+    local promptLbl = Instance.new("TextLabel")
+    promptLbl.Text = "اختر اللغة / Choose Language"
+    promptLbl.Size = UDim2.new(1, -20, 0, 30)
+    promptLbl.Position = UDim2.new(0, 10, 0, 58)
+    promptLbl.BackgroundTransparency = 1
+    promptLbl.TextColor3 = C.txtM
+    promptLbl.Font = Enum.Font.Gotham
+    promptLbl.TextSize = 12
+    promptLbl.ZIndex = 52
+    promptLbl.Parent = langBox
+
+    local function mkLangBtn(txt, xOff, baseCol)
+        local b = Instance.new("TextButton")
+        b.Text = txt
+        b.Size = UDim2.new(0, 116, 0, 48)
+        b.Position = UDim2.new(0, xOff, 0, 94)
+        b.BackgroundColor3 = baseCol
+        b.TextColor3 = C.txtW
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 12
+        b.BorderSizePixel = 0
+        b.AutoButtonColor = false
+        b.ZIndex = 52
+        b.Parent = langBox
+
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 12)
+        addGlow(b, lighten(baseCol, 20), 1)
+
+        b.MouseEnter:Connect(function()
+            tw(b, {BackgroundColor3 = lighten(baseCol)}, 0.15)
+        end)
+
+        b.MouseLeave:Connect(function()
+            tw(b, {BackgroundColor3 = baseCol}, 0.15)
+        end)
+
+        b.MouseButton1Click:Connect(function()
+            spawnRipple(b, Vector2.new(
+                b.AbsolutePosition.X + b.AbsoluteSize.X * 0.5,
+                b.AbsolutePosition.Y + b.AbsoluteSize.Y * 0.5
+            ))
+
+            btnPunch(b)
+        end)
+
+        return b
+    end
+
+    local arBtn = mkLangBtn("🇸🇦 العربية", 12, C.accDim)
+    local enBtn = mkLangBtn("🇬🇧 English", 140, Color3.fromRGB(20, 20, 45))
+
+    tw(langBox, {Size = UDim2.new(0, 280, 0, 156), BackgroundTransparency = 0}, 0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+    local function buildMain(lang)
+        local L = TR[lang]
+
+        tw(overlay, {BackgroundTransparency = 1}, 0.25)
+        tw(langBox, {Size = UDim2.new(0, 280, 0, 0), BackgroundTransparency = 1}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+
+        task.delay(0.38, function()
+            pcall(function()
+                overlay:Destroy()
+            end)
+
+            pcall(function()
+                langBox:Destroy()
+            end)
+        end)
+
+        local PW = 370
+        local FH = 360
+
+        local pan = Instance.new("Frame")
+        pan.Name = "MainPanel"
+        pan.Size = UDim2.new(0, 0, 0, 0)
+        pan.AnchorPoint = Vector2.new(1, 0)
+        pan.Position = UDim2.new(1, -12, 0, 46)
+        pan.BackgroundColor3 = C.bg1
+        pan.BorderSizePixel = 0
+        pan.ClipsDescendants = true
+        pan.Parent = gui
+
+        Instance.new("UICorner", pan).CornerRadius = UDim.new(0, 16)
+        addGlow(pan, C.acc, 1.5)
+
+        local uiConns = {}
+
+        local function trackUI(conn)
+            table.insert(uiConns, conn)
+            return conn
+        end
+
+        pan.Destroying:Connect(function()
+            for _, c in ipairs(uiConns) do
+                pcall(function()
+                    c:Disconnect()
+                end)
+            end
+        end)
+
+        task.delay(0.1, function()
+            tw(pan, {Size = UDim2.new(0, PW, 0, FH)}, 0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end)
+
+        local hdr = Instance.new("Frame")
+        hdr.Size = UDim2.new(1, 0, 0, 46)
+        hdr.BackgroundColor3 = C.bg2
+        hdr.BorderSizePixel = 0
+        hdr.ZIndex = 5
+        hdr.Parent = pan
+
+        Instance.new("UICorner", hdr).CornerRadius = UDim.new(0, 16)
+
+        local hdrBot = Instance.new("Frame")
+        hdrBot.Size = UDim2.new(1, 0, 0.5, 0)
+        hdrBot.Position = UDim2.new(0, 0, 0.5, 0)
+        hdrBot.BackgroundColor3 = C.bg2
+        hdrBot.BorderSizePixel = 0
+        hdrBot.ZIndex = 5
+        hdrBot.Parent = hdr
+
+        local hdrLine = Instance.new("Frame")
+        hdrLine.Size = UDim2.new(1, 0, 0, 1)
+        hdrLine.Position = UDim2.new(0, 0, 1, -1)
+        hdrLine.BackgroundColor3 = C.sep
+        hdrLine.BorderSizePixel = 0
+        hdrLine.ZIndex = 6
+        hdrLine.Parent = hdr
+
+        local iconLbl = Instance.new("TextLabel")
+        iconLbl.Text = "🚗"
+        iconLbl.Size = UDim2.new(0, 30, 1, 0)
+        iconLbl.Position = UDim2.new(0, 10, 0, 0)
+        iconLbl.BackgroundTransparency = 1
+        iconLbl.TextColor3 = C.accGlow
+        iconLbl.Font = Enum.Font.GothamBold
+        iconLbl.TextSize = 18
+        iconLbl.ZIndex = 6
+        iconLbl.Parent = hdr
+
+        local titleLbl = Instance.new("TextLabel")
+        titleLbl.Text = L.title
+        titleLbl.Size = UDim2.new(1, -85, 1, 0)
+        titleLbl.Position = UDim2.new(0, 44, 0, 0)
+        titleLbl.BackgroundTransparency = 1
+        titleLbl.TextColor3 = C.txtW
+        titleLbl.Font = Enum.Font.GothamBold
+        titleLbl.TextSize = 13
+        titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+        titleLbl.ZIndex = 6
+        titleLbl.Parent = hdr
+
+        local closeBtn = Instance.new("TextButton")
+        closeBtn.Text = "✕"
+        closeBtn.Size = UDim2.new(0, 26, 0, 26)
+        closeBtn.AnchorPoint = Vector2.new(1, 0.5)
+        closeBtn.Position = UDim2.new(1, -8, 0.5, 0)
+        closeBtn.BackgroundColor3 = C.red
+        closeBtn.TextColor3 = C.txtW
+        closeBtn.Font = Enum.Font.GothamBold
+        closeBtn.TextSize = 13
+        closeBtn.BorderSizePixel = 0
+        closeBtn.AutoButtonColor = false
+        closeBtn.ZIndex = 7
+        closeBtn.Parent = hdr
+
+        Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
+
+        closeBtn.MouseEnter:Connect(function()
+            tw(closeBtn, {BackgroundColor3 = C.redH}, 0.15)
+        end)
+
+        closeBtn.MouseLeave:Connect(function()
+            tw(closeBtn, {BackgroundColor3 = C.red}, 0.15)
+        end)
+
+        local sideBtn = Instance.new("TextButton")
+        sideBtn.Text = "✕"
+        sideBtn.Size = UDim2.new(0, 28, 0, 72)
+        sideBtn.AnchorPoint = Vector2.new(0, 0.5)
+        sideBtn.Position = UDim2.new(0, 0, 0.5, 0)
+        sideBtn.BackgroundColor3 = C.accDim
+        sideBtn.TextColor3 = C.txtW
+        sideBtn.Font = Enum.Font.GothamBold
+        sideBtn.TextSize = 14
+        sideBtn.BorderSizePixel = 0
+        sideBtn.AutoButtonColor = false
+        sideBtn.ZIndex = 300
+        sideBtn.Parent = gui
+
+        Instance.new("UICorner", sideBtn).CornerRadius = UDim.new(0, 10)
+        addGlow(sideBtn, C.acc, 1.5)
+
+        sideBtn.MouseEnter:Connect(function()
+            tw(sideBtn, {BackgroundColor3 = C.acc}, 0.15)
+        end)
+
+        sideBtn.MouseLeave:Connect(function()
+            tw(sideBtn, {BackgroundColor3 = C.accDim}, 0.15)
+        end)
+
+        local panVisible = true
+
+        local function showPanel()
+            panVisible = true
+            pan.Visible = true
+            sideBtn.Text = "✕"
+
+            tw(pan, {Size = UDim2.new(0, PW, 0, FH)}, 0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end
+
+        local function hidePanel()
+            panVisible = false
+            sideBtn.Text = "☰"
+
+            tw(pan, {Size = UDim2.new(0, PW, 0, 0)}, 0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+
+            task.delay(0.34, function()
+                if not panVisible then
+                    pan.Visible = false
+                end
+            end)
+        end
+
+        sideBtn.Activated:Connect(function()
+            if panVisible then
+                hidePanel()
+            else
+                showPanel()
+            end
+        end)
+
+        closeBtn.Activated:Connect(function()
+            cleanup()
+            clearESP()
+            clearSel()
+            clearGhosts()
+            stopLivePreview()
+
+            if S.seatsHidden then
+                toggleSeats()
+            end
+
+            if S.carsHidden then
+                toggleCarsVisibility()
+            end
+
+            if S.uiHeartbeatConn then
+                pcall(function()
+                    S.uiHeartbeatConn:Disconnect()
+                end)
+
+                S.uiHeartbeatConn = nil
+            end
+
+            if _G.CarHubConnections then
+                for _, c in ipairs(_G.CarHubConnections) do
+                    pcall(function()
+                        c:Disconnect()
+                    end)
+                end
+
+                _G.CarHubConnections = {}
+            end
+
+            tw(pan, {Size = UDim2.new(0, PW, 0, 0), BackgroundTransparency = 1}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+
+            task.delay(0.35, function()
+                pcall(function()
+                    sideBtn:Destroy()
+                end)
+
+                pcall(function()
+                    gui:Destroy()
+                end)
+            end)
+        end)
+
+        local tabBar = Instance.new("Frame")
+        tabBar.Size = UDim2.new(1, -10, 0, 32)
+        tabBar.Position = UDim2.new(0, 5, 0, 48)
+        tabBar.BackgroundColor3 = C.bg0
+        tabBar.BorderSizePixel = 0
+        tabBar.ZIndex = 3
+        tabBar.Parent = pan
+
+        Instance.new("UICorner", tabBar).CornerRadius = UDim.new(0, 10)
+        addGlow(tabBar, C.sep, 1)
+
+        local tabBtns = {}
+        local pages = {}
+        local numTabs = #L.tabs
+        local bw = math.floor((PW - 14) / numTabs)
+
+        local tabIndicator = Instance.new("Frame")
+        tabIndicator.Size = UDim2.new(0, bw - 4, 1, -6)
+        tabIndicator.Position = UDim2.new(0, 2, 0, 3)
+        tabIndicator.BackgroundColor3 = C.acc
+        tabIndicator.BorderSizePixel = 0
+        tabIndicator.ZIndex = 1
+        tabIndicator.Parent = tabBar
+
+        Instance.new("UICorner", tabIndicator).CornerRadius = UDim.new(0, 8)
+
+        local indicatorShine = Instance.new("Frame")
+        indicatorShine.Size = UDim2.new(1, 0, 0.5, 0)
+        indicatorShine.Position = UDim2.new(0, 0, 0, 0)
+        indicatorShine.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        indicatorShine.BackgroundTransparency = 0.78
+        indicatorShine.BorderSizePixel = 0
+        indicatorShine.ZIndex = 1
+        indicatorShine.Parent = tabIndicator
+
+        Instance.new("UICorner", indicatorShine).CornerRadius = UDim.new(0, 8)
+
+        for i, tabName in ipairs(L.tabs) do
+            local xOff = 2 + (i - 1) * bw
+
+            local tb = Instance.new("TextButton")
+            tb.Text = tabName
+            tb.Size = UDim2.new(0, bw - 2, 1, -6)
+            tb.Position = UDim2.new(0, xOff, 0, 3)
+            tb.BackgroundTransparency = 1
+            tb.TextColor3 = i == 1 and C.txtW or C.txtD
+            tb.Font = Enum.Font.GothamSemibold
+            tb.TextSize = 10
+            tb.BorderSizePixel = 0
+            tb.AutoButtonColor = false
+            tb.ZIndex = 2
+            tb.Parent = tabBar
+
+            tabBtns[i] = tb
+
+            local pg = Instance.new("ScrollingFrame")
+            pg.Name = "Page" .. i
+            pg.Size = UDim2.new(1, -6, 1, -84)
+            pg.Position = UDim2.new(0, 3, 0, 82)
+            pg.BackgroundTransparency = 1
+            pg.BorderSizePixel = 0
+            pg.ScrollBarThickness = 3
+            pg.ScrollBarImageColor3 = C.acc
+            pg.Visible = (i == 1)
+            pg.ZIndex = 1
+            pg.Parent = pan
+            pg.CanvasSize = UDim2.new(0, 0, 0, 500)
+
+            pages[i] = pg
+        end
+
+        local curTab = 1
+
+        local function switchTab(i)
+            if curTab == i then
+                return
+            end
+
+            pages[curTab].Visible = false
+            curTab = i
+
+            local targetX = 2 + (i - 1) * bw
+
+            tw(tabIndicator, {Position = UDim2.new(0, targetX, 0, 3)}, 0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+            for j, b in ipairs(tabBtns) do
+                tw(b, {TextColor3 = j == i and C.txtW or C.txtD}, 0.18)
+            end
+
+            pages[i].Visible = true
+        end
+
+        for i = 1, numTabs do
+            local idx = i
+
+            tabBtns[i].Activated:Connect(function()
+                if S.isDragging then
+                    return
+                end
+
+                spawnRipple(tabBtns[idx], Vector2.new(
+                    tabBtns[idx].AbsolutePosition.X + tabBtns[idx].AbsoluteSize.X * 0.5,
+                    tabBtns[idx].AbsolutePosition.Y + tabBtns[idx].AbsoluteSize.Y * 0.5
+                ))
+
+                switchTab(idx)
+            end)
+
+            tabBtns[i].MouseEnter:Connect(function()
+                if curTab ~= idx then
+                    tw(tabBtns[idx], {TextColor3 = C.txtM}, 0.12)
+                end
+            end)
+
+            tabBtns[i].MouseLeave:Connect(function()
+                if curTab ~= idx then
+                    tw(tabBtns[idx], {TextColor3 = C.txtD}, 0.12)
+                end
+            end)
+        end
+
+        local btnCol = {}
+
+        local function mkBtn(pg, txt, col, yp, xoff, wd)
+            xoff = xoff or 6
+            wd = wd or (PW - 12)
+
+            local b = Instance.new("TextButton")
+            b.Text = txt
+            b.Size = UDim2.new(0, wd, 0, 34)
+            b.Position = UDim2.new(0, xoff, 0, yp)
+            b.BackgroundColor3 = col
+            b.TextColor3 = C.txtW
+            b.Font = Enum.Font.GothamSemibold
+            b.TextSize = 11
+            b.BorderSizePixel = 0
+            b.AutoButtonColor = false
+            b.ZIndex = 4
+            b.Parent = pg
+
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
+
+            local topLine = Instance.new("Frame")
+            topLine.Size = UDim2.new(1, -16, 0, 1)
+            topLine.Position = UDim2.new(0, 8, 0, 0)
+            topLine.BackgroundColor3 = lighten(col, 15)
+            topLine.BorderSizePixel = 0
+            topLine.ZIndex = 5
+            topLine.Parent = b
+
+            btnCol[b] = col
+
+            b.MouseEnter:Connect(function()
+                tw(b, {BackgroundColor3 = lighten(btnCol[b], 18)}, 0.15)
+            end)
+
+            b.MouseLeave:Connect(function()
+                tw(b, {BackgroundColor3 = btnCol[b]}, 0.18)
+            end)
+
+            b.Activated:Connect(function()
+                local cx = b.AbsolutePosition.X + b.AbsoluteSize.X * 0.5
+                local cy = b.AbsolutePosition.Y + b.AbsoluteSize.Y * 0.5
+
+                spawnRipple(b, Vector2.new(cx, cy))
+                btnPunch(b)
+            end)
+
+            b.MouseButton1Down:Connect(function()
+                tw(b, {BackgroundTransparency = 0.15}, 0.06)
+            end)
+
+            b.MouseButton1Up:Connect(function()
+                tw(b, {BackgroundTransparency = 0}, 0.15, Enum.EasingStyle.Back)
+            end)
+
+            return b
+        end
+
+        local function mk2(pg, tA, tB, yp, cA, cB)
+            local hw = math.floor((PW - 18) / 2)
+            return mkBtn(pg, tA, cA, yp, 6, hw), mkBtn(pg, tB, cB, yp, 12 + hw, hw)
+        end
+
+        local function mk3(pg, tA, tB, tC, yp, cA, cB, cC)
+            local w3 = math.floor((PW - 20) / 3)
+
+            return mkBtn(pg, tA, cA, yp, 6, w3),
+                mkBtn(pg, tB, cB, yp, 10 + w3, w3),
+                mkBtn(pg, tC, cC, yp, 14 + w3 * 2, w3)
+        end
+
+        local function mkSection(pg, txt, yp)
+            local f = Instance.new("Frame")
+            f.Size = UDim2.new(1, -12, 0, 22)
+            f.Position = UDim2.new(0, 6, 0, yp)
+            f.BackgroundColor3 = C.bg0
+            f.BorderSizePixel = 0
+            f.ZIndex = 4
+            f.Parent = pg
+
+            Instance.new("UICorner", f).CornerRadius = UDim.new(0, 6)
+
+            local l = Instance.new("TextLabel")
+            l.Text = txt
+            l.Size = UDim2.new(1, -10, 1, 0)
+            l.Position = UDim2.new(0, 5, 0, 0)
+            l.BackgroundTransparency = 1
+            l.TextColor3 = C.txtD
+            l.Font = Enum.Font.GothamSemibold
+            l.TextSize = 9
+            l.TextXAlignment = Enum.TextXAlignment.Center
+            l.ZIndex = 5
+            l.Parent = f
+
+            return f
+        end
+
+        local function mkSep(pg, yp)
+            local f = Instance.new("Frame")
+            f.Size = UDim2.new(1, -20, 0, 1)
+            f.Position = UDim2.new(0, 10, 0, yp)
+            f.BackgroundColor3 = C.sep
+            f.BorderSizePixel = 0
+            f.ZIndex = 4
+            f.Parent = pg
+        end
+
+        local function mkInfoBox(pg, txt, yp, h)
+            h = h or 28
+
+            local bg = Instance.new("Frame")
+            bg.Size = UDim2.new(1, -12, 0, h)
+            bg.Position = UDim2.new(0, 6, 0, yp)
+            bg.BackgroundColor3 = C.bg0
+            bg.BorderSizePixel = 0
+            bg.ZIndex = 4
+            bg.Parent = pg
+
+            Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 8)
+            addGlow(bg, C.sep, 1)
+
+            local l = Instance.new("TextLabel")
+            l.Text = txt
+            l.Size = UDim2.new(1, -8, 1, 0)
+            l.Position = UDim2.new(0, 4, 0, 0)
+            l.BackgroundTransparency = 1
+            l.TextColor3 = C.accGlow
+            l.Font = Enum.Font.Gotham
+            l.TextSize = 10
+            l.TextXAlignment = Enum.TextXAlignment.Center
+            l.TextWrapped = true
+            l.ZIndex = 5
+            l.Parent = bg
+
+            return l
+        end
+
+        local function mkSlider(pg, label, yp, mn, mx, initVal, onChange, isFloat)
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, -12, 0, 56)
+            row.Position = UDim2.new(0, 6, 0, yp)
+            row.BackgroundColor3 = C.bg3
+            row.BorderSizePixel = 0
+            row.ZIndex = 4
+            row.Parent = pg
+
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 10)
+
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1, -74, 0, 18)
+            lbl.Position = UDim2.new(0, 8, 0, 4)
+            lbl.BackgroundTransparency = 1
+            lbl.TextColor3 = C.txtL
+            lbl.Font = Enum.Font.GothamSemibold
+            lbl.TextSize = 10
+            lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.ZIndex = 5
+            lbl.Parent = row
+            lbl.Text = label
+
+            local valBox = Instance.new("TextBox")
+            valBox.Size = UDim2.new(0, 62, 0, 18)
+            valBox.Position = UDim2.new(1, -66, 0, 4)
+            valBox.BackgroundColor3 = C.bg0
+            valBox.BackgroundTransparency = 0
+            valBox.TextColor3 = C.accGlow
+            valBox.Font = Enum.Font.GothamBold
+            valBox.TextSize = 11
+            valBox.TextXAlignment = Enum.TextXAlignment.Right
+            valBox.ZIndex = 5
+            valBox.Parent = row
+            valBox.ClearTextOnFocus = false
+            valBox.BorderSizePixel = 0
+
+            local currentVal = initVal
+
+            local function formatVal(v)
+                if isFloat then
+                    return string.format("%.2f", v)
+                else
+                    return tostring(math.floor(v))
+                end
+            end
+
+            valBox.Text = formatVal(initVal)
+
+            Instance.new("UICorner", valBox).CornerRadius = UDim.new(0, 5)
+
+            local valStroke = addGlow(valBox, C.sep, 1)
+
+            local track = Instance.new("Frame")
+            track.Size = UDim2.new(1, -16, 0, 7)
+            track.Position = UDim2.new(0, 8, 0, 38)
+            track.BackgroundColor3 = C.bg0
+            track.BorderSizePixel = 0
+            track.ZIndex = 5
+            track.Parent = row
+
+            Instance.new("UICorner", track).CornerRadius = UDim.new(0, 4)
+
+            local pct = (initVal - mn) / (mx - mn)
+
+            local fill = Instance.new("Frame")
+            fill.Size = UDim2.new(pct, 0, 1, 0)
+            fill.BackgroundColor3 = C.acc
+            fill.BorderSizePixel = 0
+            fill.ZIndex = 6
+            fill.Parent = track
+
+            Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+
+            local fillShine = Instance.new("Frame")
+            fillShine.Size = UDim2.new(1, 0, 0.5, 0)
+            fillShine.Position = UDim2.new(0, 0, 0, 0)
+            fillShine.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            fillShine.BackgroundTransparency = 0.82
+            fillShine.BorderSizePixel = 0
+            fillShine.ZIndex = 7
+            fillShine.Parent = fill
+
+            Instance.new("UICorner", fillShine).CornerRadius = UDim.new(0, 4)
+
+            local knob = Instance.new("TextButton")
+            knob.Text = ""
+            knob.Size = UDim2.new(0, 18, 0, 18)
+            knob.AnchorPoint = Vector2.new(0.5, 0.5)
+            knob.Position = UDim2.new(pct, 0, 0.5, 0)
+            knob.BackgroundColor3 = C.accGlow
+            knob.BorderSizePixel = 0
+            knob.AutoButtonColor = false
+            knob.ZIndex = 8
+            knob.Parent = track
+
+            Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+            local knobStroke = Instance.new("UIStroke", knob)
+            knobStroke.Color = C.accGlow
+            knobStroke.Thickness = 2
+            knobStroke.Transparency = 0.6
+
+            local function applyValue(rx)
+                rx = math.clamp(rx, 0, 1)
+
+                local nv = mn + rx * (mx - mn)
+                currentVal = nv
+
+                tw(fill, {Size = UDim2.new(rx, 0, 1, 0)}, 0.08, Enum.EasingStyle.Quad)
+                tw(knob, {Position = UDim2.new(rx, 0, 0.5, 0)}, 0.08, Enum.EasingStyle.Quad)
+
+                valBox.Text = formatVal(nv)
+
+                if onChange then
+                    onChange(nv)
+                end
+            end
+
+            local dragging = false
+
+            knob.MouseButton1Down:Connect(function()
+                dragging = true
+
+                tw(knob, {Size = UDim2.new(0, 22, 0, 22)}, 0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                TweenService:Create(knobStroke, TweenInfo.new(0.12), {Transparency = 0.2}):Play()
+            end)
+
+            trackUI(UIS.InputChanged:Connect(function(inp)
+                if not dragging then
+                    return
+                end
+
+                if not track.Parent then
+                    dragging = false
+                    return
+                end
+
+                if inp.UserInputType ~= Enum.UserInputType.MouseMovement and inp.UserInputType ~= Enum.UserInputType.Touch then
+                    return
+                end
+
+                local abs = track.AbsolutePosition
+                local w = track.AbsoluteSize.X
+
+                local rx = math.clamp((inp.Position.X - abs.X) / w, 0, 1)
+
+                applyValue(rx)
+            end))
+
+            trackUI(UIS.InputEnded:Connect(function(inp)
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+                    if dragging then
+                        dragging = false
+
+                        tw(knob, {Size = UDim2.new(0, 18, 0, 18)}, 0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                        TweenService:Create(knobStroke, TweenInfo.new(0.18), {Transparency = 0.6}):Play()
+                    end
+                end
+            end))
+
+            valBox.Focused:Connect(function()
+                tw(valBox, {BackgroundColor3 = C.bg4}, 0.15)
+                TweenService:Create(valStroke, TweenInfo.new(0.15), {Color = C.accGlow, Thickness = 1.5}):Play()
+            end)
+
+            valBox.FocusLost:Connect(function()
+                tw(valBox, {BackgroundColor3 = C.bg0}, 0.2)
+                TweenService:Create(valStroke, TweenInfo.new(0.2), {Color = C.sep, Thickness = 1}):Play()
+
+                local num = tonumber(valBox.Text)
+
+                if num then
+                    num = math.clamp(num, mn, mx)
+
+                    local rx = (num - mn) / (mx - mn)
+
+                    applyValue(rx)
+                else
+                    valBox.Text = formatVal(currentVal)
+                end
+            end)
+
+            track.MouseEnter:Connect(function()
+                tw(track, {BackgroundColor3 = C.bg3}, 0.15)
+            end)
+
+            track.MouseLeave:Connect(function()
+                tw(track, {BackgroundColor3 = C.bg0}, 0.2)
+            end)
+
+            return valBox
+        end
+
+        local function mkToggle(pg, txt, yp, initOn, onChange)
+            local frame = Instance.new("Frame")
+            frame.Size = UDim2.new(1, -12, 0, 34)
+            frame.Position = UDim2.new(0, 6, 0, yp)
+            frame.BackgroundColor3 = C.bg3
+            frame.BorderSizePixel = 0
+            frame.ZIndex = 4
+            frame.Parent = pg
+
+            Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+            local lbl = Instance.new("TextLabel")
+            lbl.Text = txt
+            lbl.Size = UDim2.new(1, -58, 1, 0)
+            lbl.Position = UDim2.new(0, 10, 0, 0)
+            lbl.BackgroundTransparency = 1
+            lbl.TextColor3 = C.txtL
+            lbl.Font = Enum.Font.GothamSemibold
+            lbl.TextSize = 10
+            lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.ZIndex = 5
+            lbl.Parent = frame
+
+            local track = Instance.new("TextButton")
+            track.Text = ""
+            track.Size = UDim2.new(0, 44, 0, 24)
+            track.AnchorPoint = Vector2.new(1, 0.5)
+            track.Position = UDim2.new(1, -8, 0.5, 0)
+            track.BackgroundColor3 = initOn and C.acc or C.bg0
+            track.BorderSizePixel = 0
+            track.AutoButtonColor = false
+            track.ZIndex = 5
+            track.Parent = frame
+
+            Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+            local stroke = addGlow(track, initOn and C.acc or C.sep, 1.2)
+
+            local knob = Instance.new("Frame")
+            knob.Size = UDim2.new(0, 18, 0, 18)
+            knob.AnchorPoint = Vector2.new(0, 0.5)
+            knob.Position = initOn and UDim2.new(1, -20, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+            knob.BackgroundColor3 = C.txtW
+            knob.BorderSizePixel = 0
+            knob.ZIndex = 6
+            knob.Parent = track
+
+            Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+            local on = initOn
+
+            local function setOn(v)
+                on = v
+
+                tw(track, {BackgroundColor3 = on and C.acc or C.bg0}, 0.22, Enum.EasingStyle.Quint)
+                tw(knob, {Position = on and UDim2.new(1, -20, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)}, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+                if stroke then
+                    TweenService:Create(stroke, TweenInfo.new(0.22), {Color = on and C.acc or C.sep}):Play()
+                end
+
+                tw(frame, {BackgroundColor3 = on and Color3.fromRGB(22, 18, 45) or C.bg3}, 0.2)
+
+                if onChange then
+                    onChange(on)
+                end
+            end
+
+            track.Activated:Connect(function()
+                spawnRipple(track, Vector2.new(
+                    track.AbsolutePosition.X + track.AbsoluteSize.X * 0.5,
+                    track.AbsolutePosition.Y + track.AbsoluteSize.Y * 0.5
+                ))
+
+                setOn(not on)
+            end)
+
+            return frame, function(v)
+                setOn(v)
+            end
+        end
+
+        local function mkStatusBadge(pg, txt, yp, col)
+            local f = Instance.new("Frame")
+            f.Size = UDim2.new(1, -12, 0, 28)
+            f.Position = UDim2.new(0, 6, 0, yp)
+            f.BackgroundColor3 = C.bg0
+            f.BorderSizePixel = 0
+            f.ZIndex = 4
+            f.Parent = pg
+
+            Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+            addGlow(f, col, 1.2)
+
+            local l = Instance.new("TextLabel")
+            l.Text = txt
+            l.Size = UDim2.new(1, 0, 1, 0)
+            l.BackgroundTransparency = 1
+            l.TextColor3 = col
+            l.Font = Enum.Font.GothamBold
+            l.TextSize = 11
+            l.TextXAlignment = Enum.TextXAlignment.Center
+            l.ZIndex = 5
+            l.Parent = f
+
+            return l
+        end
+
+        local function flashBtn(btn, msg, orig, d)
+            local origCol = btnCol[btn]
+            local origText = btn.Text
+
+            btn.Text = msg
+
+            tw(btn, {BackgroundColor3 = lighten(origCol or C.bg4, 50)}, 0.1)
+
+            task.delay(0.2, function()
+                if btn and btn.Parent then
+                    tw(btn, {BackgroundColor3 = origCol or C.bg4}, 0.25)
+                end
+            end)
+
+            task.delay(d or 1.8, function()
+                if btn and btn.Parent then
+                    btn.Text = orig
+                end
+            end)
+        end
+
+        ----------------------------------------------------------------
+        -- Page 1: Fly
+        ----------------------------------------------------------------
+        local p1 = pages[1]
+        local y = 6
+
+        mkSection(p1, L.flySection, y); y = y + 28
+
+        local statusLbl = mkStatusBadge(p1, S.flying and L.s_on or L.s_off, y, S.flying and C.green or C.red); y = y + 34
+
+        local flyBtn = mkBtn(p1, S.flying and L.f_on or L.f_off, S.flying and C.acc or C.bg4, y); y = y + 40
+
+        mkSep(p1, y); y = y + 10
+
+        mkSlider(p1, L.spd, y, 10, 500, Cfg.FlySpeed, function(v)
+            Cfg.FlySpeed = v
+        end, false); y = y + 62
+
+        mkSlider(p1, L.smt, y, 1, 30, math.floor(Cfg.Smooth * 100), function(v)
+            Cfg.Smooth = v / 100
+        end, false); y = y + 62
+
+        mkSep(p1, y); y = y + 8
+
+        mkInfoBox(p1, L.ud_info, y, 28); y = y + 36
+
+        mkSep(p1, y); y = y + 8
+
+        mkSection(p1, L.utilSection, y); y = y + 28
+
+        mkToggle(p1, L.noclip, y, S.noclip, function(v)
+            S.noclip = v
+
+            local car = getPrimary()
+            local targetCar = car or S.car
+
+            if targetCar and targetCar.Parent then
+                for _, p in ipairs(targetCar:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CanCollide = not v
+                    end
+                end
+            end
+        end); y = y + 40
+
+        local frzBtn = mkBtn(p1, L.frz, C.teal, y); y = y + 40
+
+        p1.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+
+        flyBtn.Activated:Connect(function()
+            S.flying = not S.flying
+
+            flyBtn.Text = S.flying and L.f_on or L.f_off
+
+            tw(flyBtn, {BackgroundColor3 = S.flying and C.acc or C.bg4}, 0.25, Enum.EasingStyle.Back)
+            btnCol[flyBtn] = S.flying and C.acc or C.bg4
+
+            statusLbl.Text = S.flying and L.s_on or L.s_off
+            tw(statusLbl, {TextColor3 = S.flying and C.green or C.red}, 0.22)
+
+            local sc = statusLbl.Parent:FindFirstChildOfClass("UIStroke")
+
+            if sc then
+                TweenService:Create(sc, TweenInfo.new(0.22), {Color = S.flying and C.green or C.red}):Play()
+            end
+
+            if not S.flying then
+                cleanup()
+            end
+        end)
+
+        frzBtn.Activated:Connect(function()
+            if not S.frozen then
+                local car = getPrimary()
+
+                if car then
+                    freezeCar(car)
+                elseif S.car and S.car.Parent then
+                    freezeCar(S.car)
+                end
+
+                frzBtn.Text = L.unfrz
+                tw(frzBtn, {BackgroundColor3 = C.red}, 0.22)
+                btnCol[frzBtn] = C.red
+            else
+                unfreezeCar()
+
+                frzBtn.Text = L.frz
+                tw(frzBtn, {BackgroundColor3 = C.teal}, 0.22)
+                btnCol[frzBtn] = C.teal
+            end
+        end)
+
+        ----------------------------------------------------------------
+        -- Page 2: Teleport
+        ----------------------------------------------------------------
+        local p2 = pages[2]
+        y = 6
+
+        mkSection(p2, L.tpSection, y); y = y + 28
+
+        local coordPlrLbl = mkInfoBox(p2, fmtPos(S.savedPlr), y, 26); y = y + 32
+
+        local svpBtn, tppBtn = mk2(p2, L.sv_p, L.tp_p, y, C.green, C.teal); y = y + 40
+
+        mkSep(p2, y); y = y + 10
+
+        mkSection(p2, L.carSection, y); y = y + 28
+
+        local coordCarLbl = mkInfoBox(p2, fmtPos(S.savedCar), y, 26); y = y + 32
+
+        local svcBtn, tpcBtn = mk2(p2, L.sv_c, L.tp_c, y, C.orange, C.red); y = y + 40
+
+        local tc2pBtn = mkBtn(p2, L.tp_c2p, C.accDim, y); y = y + 40
+
+        local tp2cBtn = mkBtn(p2, L.tp_p2c, Color3.fromRGB(35, 30, 70), y); y = y + 40
+
+        p2.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+
+        svpBtn.Activated:Connect(function()
+            local ch = LP.Character
+            local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+            if rt then
+                S.savedPlr = rt.CFrame
+
+                tw(coordPlrLbl.Parent, {BackgroundColor3 = Color3.fromRGB(10, 30, 15)}, 0.15)
+
+                task.delay(0.3, function()
+                    if coordPlrLbl.Parent and coordPlrLbl.Parent.Parent then
+                        tw(coordPlrLbl.Parent, {BackgroundColor3 = C.bg0}, 0.3)
+                    end
+                end)
+
+                coordPlrLbl.Text = fmtPos(S.savedPlr)
+                flashBtn(svpBtn, L.saved, L.sv_p)
+            end
+        end)
+
+        tppBtn.Activated:Connect(function()
+            if not S.savedPlr then
+                flashBtn(tppBtn, L.e_save, L.tp_p)
+                return
+            end
+
+            local ch = LP.Character
+            local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+            if rt then
+                rt.CFrame = S.savedPlr
+            end
+        end)
+
+        svcBtn.Activated:Connect(function()
+            local car, prim = getPrimary()
+
+            if car and prim then
+                S.savedCar = prim.CFrame
+            else
+                local ch = LP.Character
+                local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+                if rt then
+                    S.savedCar = rt.CFrame
+                end
+            end
+
+            if S.savedCar then
+                tw(coordCarLbl.Parent, {BackgroundColor3 = Color3.fromRGB(25, 15, 0)}, 0.15)
+
+                task.delay(0.3, function()
+                    if coordCarLbl.Parent and coordCarLbl.Parent.Parent then
+                        tw(coordCarLbl.Parent, {BackgroundColor3 = C.bg0}, 0.3)
+                    end
+                end)
+
+                coordCarLbl.Text = fmtPos(S.savedCar)
+                flashBtn(svcBtn, L.saved, L.sv_c)
+            end
+        end)
+
+        tpcBtn.Activated:Connect(function()
+            if S.isTp then
+                return
+            end
+
+            local car = getPrimary()
+
+            if not car then
+                flashBtn(tpcBtn, L.e_ride, L.tp_c)
+                return
+            end
+
+            if not S.savedCar then
+                flashBtn(tpcBtn, L.e_save, L.tp_c)
+                return
+            end
+
+            S.isTp = true
+            tpcBtn.Text = L.going
+
+            local wf = S.flying
+            S.flying = false
+
+            if S.bv then
+                S.bv.Velocity = Vector3.zero
+            end
+
+            task.wait(0.05)
+
+            prepareAndTeleport(car, S.savedCar, {}, true)
+
+            S.flying = wf
+            S.isTp = false
+            tpcBtn.Text = L.tp_c
+        end)
+
+        tc2pBtn.Activated:Connect(function()
+            if S.isTp then
+                return
+            end
+
+            local car = getPrimary()
+
+            if not car then
+                flashBtn(tc2pBtn, L.e_ride, L.tp_c2p)
+                return
+            end
+
+            local ch = LP.Character
+            local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+            if not rt then
+                return
+            end
+
+            S.isTp = true
+            tc2pBtn.Text = L.going
+
+            local wf = S.flying
+            S.flying = false
+
+            if S.bv then
+                S.bv.Velocity = Vector3.zero
+            end
+
+            task.wait(0.05)
+
+            prepareAndTeleport(car, rt.CFrame * CFrame.new(0, 0, 10), {}, true)
+
+            S.flying = wf
+            S.isTp = false
+            tc2pBtn.Text = L.tp_c2p
+        end)
+
+        tp2cBtn.Activated:Connect(function()
+            if not S.savedCar then
+                flashBtn(tp2cBtn, L.e_save, L.tp_p2c)
+                return
+            end
+
+            local ch = LP.Character
+            local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+            if rt then
+                rt.CFrame = S.savedCar * CFrame.new(0, 4, 6)
+            end
+        end)
+
+        ----------------------------------------------------------------
+        -- Page 3: Parking / Queue
+        ----------------------------------------------------------------
+        local p3 = pages[3]
+        y = 6
+
+        local selBadge = Instance.new("Frame")
+        selBadge.Size = UDim2.new(1, -12, 0, 34)
+        selBadge.Position = UDim2.new(0, 6, 0, y)
+        selBadge.BackgroundColor3 = C.bg0
+        selBadge.BorderSizePixel = 0
+        selBadge.ZIndex = 4
+        selBadge.Parent = p3
+
+        Instance.new("UICorner", selBadge).CornerRadius = UDim.new(0, 10)
+        addGlow(selBadge, C.acc, 1)
+
+        local selCountLbl = Instance.new("TextLabel")
+        selCountLbl.Text = L.selcount .. ": 0 " .. L.cars_
+        selCountLbl.Size = UDim2.new(1, 0, 1, 0)
+        selCountLbl.BackgroundTransparency = 1
+        selCountLbl.TextColor3 = C.accGlow
+        selCountLbl.Font = Enum.Font.GothamBold
+        selCountLbl.TextSize = 12
+        selCountLbl.ZIndex = 5
+        selCountLbl.Parent = selBadge
+
+        y = y + 40
+
+        mkSection(p3, L.gatherSection, y); y = y + 28
+
+        local svLocBtn = mkBtn(p3, L.svloc, C.teal, y); y = y + 40
+
+        local autoBtn = mkBtn(p3, S.autoEnabled and L.a_on or L.a_off, S.autoEnabled and C.acc or C.bg4, y); y = y + 40
+
+        mkSep(p3, y); y = y + 8
+
+        mkSection(p3, L.selSection, y); y = y + 28
+
+        local smBtn, saBtn, clrBtn = mk3(
+            p3,
+            S.selectMode and L.sm_on or L.sm_off,
+            S.selectAll and L.dsa or L.sa,
+            L.clr,
+            y,
+            S.selectMode and C.green or C.accDim,
+            S.selectAll and C.teal or C.bg4,
+            C.red
+        )
+
+        y = y + 40
+
+        mkSep(p3, y); y = y + 8
+
+        mkSection(p3, L.previewSection, y); y = y + 28
+
+        local ghostBtn = mkBtn(p3, L.prevQ, C.accDim, y); y = y + 40
+
+        mkToggle(p3, L.livePreview, y, Cfg.LivePreview, function(v)
+            Cfg.LivePreview = v
+
+            if v then
+                if #S.selCars > 0 then
+                    startLivePreview()
+                end
+            else
+                stopLivePreview()
+            end
+        end)
+
+        y = y + 40
+
+        mkSep(p3, y); y = y + 8
+
+        mkSection(p3, L.deleteSec, y); y = y + 28
+
+        mkInfoBox(p3, L.deleteWarn, y, 26); y = y + 32
+
+        mkSection(p3, L.deleteMode, y); y = y + 28
+
+        local deleteOnlyBtn, deleteWithItemsBtn = mk2(
+            p3,
+            L.deleteOnly,
+            L.deleteWithItems,
+            y,
+            Cfg.DeleteCarOnly and C.acc or C.bg4,
+            Cfg.DeleteCarOnly and C.bg4 or C.acc
+        )
+
+        y = y + 40
+
+        local deleteSpeedDisplay = Instance.new("Frame")
+        deleteSpeedDisplay.Size = UDim2.new(1, -12, 0, 0)
+        deleteSpeedDisplay.Position = UDim2.new(0, 6, 0, y)
+        deleteSpeedDisplay.BackgroundColor3 = Color3.fromRGB(35, 5, 10)
+        deleteSpeedDisplay.BackgroundTransparency = 0
+        deleteSpeedDisplay.BorderSizePixel = 0
+        deleteSpeedDisplay.ClipsDescendants = true
+        deleteSpeedDisplay.ZIndex = 4
+        deleteSpeedDisplay.Parent = p3
+
+        Instance.new("UICorner", deleteSpeedDisplay).CornerRadius = UDim.new(0, 8)
+        addGlow(deleteSpeedDisplay, C.red, 1.2)
+
+        local deleteSpeedLbl = Instance.new("TextLabel")
+        deleteSpeedLbl.Text = "0 ⬇"
+        deleteSpeedLbl.Size = UDim2.new(1, 0, 1, 0)
+        deleteSpeedLbl.BackgroundTransparency = 1
+        deleteSpeedLbl.TextColor3 = C.red
+        deleteSpeedLbl.Font = Enum.Font.GothamBold
+        deleteSpeedLbl.TextSize = 12
+        deleteSpeedLbl.ZIndex = 5
+        deleteSpeedLbl.Parent = deleteSpeedDisplay
+
+        local deleteBtn = mkBtn(p3, L.deleteCar, C.red, y); y = y + 40
+
+        mkSlider(p3, L.deleteSpeed, y, 10, 500, Cfg.DeleteSpeed, function(v)
+            Cfg.DeleteSpeed = v
+        end, false); y = y + 62
+
+        mkSep(p3, y); y = y + 8
+
+        local seatTglBtn = mkBtn(p3, S.seatsHidden and L.seatTglOn or L.seatTgl, S.seatsHidden and C.green or C.orange, y); y = y + 40
+
+        local carHideBtn = mkBtn(p3, S.carsHidden and L.carShow or L.carHide, S.carsHidden and C.teal or C.bg4, y); y = y + 40
+
+        mkSep(p3, y); y = y + 8
+
+        mkSection(p3, L.qSettings, y); y = y + 28
+
+        mkSlider(p3, L.cprLabel, y, 1, 20, Cfg.CarsPerRow, function(v)
+            Cfg.CarsPerRow = math.floor(v)
+            refreshGhostPreview()
+        end, false); y = y + 62
+
+        mkSection(p3, L.rowDirSection, y); y = y + 28
+
+        local rdF, rdB = mk2(
+            p3,
+            L.rdFront,
+            L.rdBack,
+            y,
+            Cfg.RowDir == 1 and C.acc or C.bg4,
+            Cfg.RowDir == -1 and C.acc or C.bg4
+        )
+
+        y = y + 40
+
+        mkSection(p3, L.carFaceSection, y); y = y + 28
+
+        local cfF, cfB = mk2(
+            p3,
+            L.cfFwd,
+            L.cfBack,
+            y,
+            Cfg.CarFacing == 1 and C.acc or C.bg4,
+            Cfg.CarFacing == -1 and C.acc or C.bg4
+        )
+
+        y = y + 40
+
+        mkSep(p3, y); y = y + 8
+
+        local stqBtn = mkBtn(p3, L.stq, C.green, y); y = y + 40
+
+        mkSlider(p3, L.dly, y, 0.03, 10, Cfg.QueueDelay, function(v)
+            Cfg.QueueDelay = v
+        end, true); y = y + 62
+
+        p3.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+
+        local function refreshSel()
+            local newText = L.selcount .. ": " .. #S.selCars .. " " .. L.cars_
+
+            if selCountLbl.Text ~= newText then
+                tw(selCountLbl, {TextTransparency = 0.5}, 0.08)
+
+                selCountLbl.Text = newText
+
+                task.delay(0.09, function()
+                    if selCountLbl and selCountLbl.Parent then
+                        tw(selCountLbl, {TextTransparency = 0}, 0.18, Enum.EasingStyle.Back)
+                    end
+                end)
+            end
+        end
+
+        svLocBtn.Activated:Connect(function()
+            local ch = LP.Character
+            local rt = ch and ch:FindFirstChild("HumanoidRootPart")
+
+            if rt then
+                S.autoLocation = rt.CFrame
+                S.carSlots = {}
+
+                clearGhosts()
+
+                ghostBtn.Text = L.prevQ
+                tw(ghostBtn, {BackgroundColor3 = C.accDim}, 0.22)
+                btnCol[ghostBtn] = C.accDim
+
+                flashBtn(svLocBtn, L.svd, L.svloc)
+
+                refreshGhostPreview()
+            end
+        end)
+
+        autoBtn.Activated:Connect(function()
+            if not S.autoLocation then
+                flashBtn(autoBtn, L.nloc, S.autoEnabled and L.a_on or L.a_off)
+                return
+            end
+
+            S.autoEnabled = not S.autoEnabled
+
+            autoBtn.Text = S.autoEnabled and L.a_on or L.a_off
+
+            tw(autoBtn, {BackgroundColor3 = S.autoEnabled and C.acc or C.bg4}, 0.25, Enum.EasingStyle.Back)
+            btnCol[autoBtn] = S.autoEnabled and C.acc or C.bg4
+        end)
+
+        rdF.Activated:Connect(function()
+            Cfg.RowDir = 1
+
+            tw(rdF, {BackgroundColor3 = C.acc}, 0.2, Enum.EasingStyle.Back)
+            btnCol[rdF] = C.acc
+
+            tw(rdB, {BackgroundColor3 = C.bg4}, 0.18)
+            btnCol[rdB] = C.bg4
+
+            refreshGhostPreview()
+        end)
+
+        rdB.Activated:Connect(function()
+            Cfg.RowDir = -1
+
+            tw(rdB, {BackgroundColor3 = C.acc}, 0.2, Enum.EasingStyle.Back)
+            btnCol[rdB] = C.acc
+
+            tw(rdF, {BackgroundColor3 = C.bg4}, 0.18)
+            btnCol[rdF] = C.bg4
+
+            refreshGhostPreview()
+        end)
+
+        cfF.Activated:Connect(function()
+            Cfg.CarFacing = 1
+
+            tw(cfF, {BackgroundColor3 = C.acc}, 0.2, Enum.EasingStyle.Back)
+            btnCol[cfF] = C.acc
+
+            tw(cfB, {BackgroundColor3 = C.bg4}, 0.18)
+            btnCol[cfB] = C.bg4
+
+            refreshGhostPreview()
+        end)
+
+        cfB.Activated:Connect(function()
+            Cfg.CarFacing = -1
+
+            tw(cfB, {BackgroundColor3 = C.acc}, 0.2, Enum.EasingStyle.Back)
+            btnCol[cfB] = C.acc
+
+            tw(cfF, {BackgroundColor3 = C.bg4}, 0.18)
+            btnCol[cfF] = C.bg4
+
+            refreshGhostPreview()
+        end)
+
+        smBtn.Activated:Connect(function()
+            S.selectMode = not S.selectMode
+
+            smBtn.Text = S.selectMode and L.sm_on or L.sm_off
+
+            tw(smBtn, {BackgroundColor3 = S.selectMode and C.green or C.accDim}, 0.25, Enum.EasingStyle.Back)
+            btnCol[smBtn] = S.selectMode and C.green or C.accDim
+        end)
+
+        saBtn.Activated:Connect(function()
+            S.selectAll = not S.selectAll
+
+            saBtn.Text = S.selectAll and L.dsa or L.sa
+
+            tw(saBtn, {BackgroundColor3 = S.selectAll and C.teal or C.bg4}, 0.25, Enum.EasingStyle.Back)
+            btnCol[saBtn] = S.selectAll and C.teal or C.bg4
+        end)
+
+        clrBtn.Activated:Connect(function()
+            clearSel()
+            refreshSel()
+            refreshGhostPreview()
+        end)
+
+        stqBtn.Activated:Connect(function()
+            if S.queueRunning then
+                return
+            end
+
+            if not S.autoLocation then
+                flashBtn(stqBtn, L.nloc, L.stq)
+                return
+            end
+
+            if #S.selCars == 0 then
+                flashBtn(stqBtn, L.ncars, L.stq)
+                return
+            end
+
+            stqBtn.Text = L.qrun
+            tw(stqBtn, {BackgroundColor3 = C.orange}, 0.22)
+            btnCol[stqBtn] = C.orange
+
+            task.spawn(processQueue, function(_)
+                if stqBtn and stqBtn.Parent then
+                    stqBtn.Text = L.stq
+                    tw(stqBtn, {BackgroundColor3 = C.green}, 0.22)
+                    btnCol[stqBtn] = C.green
+                end
+
+                if ghostBtn and ghostBtn.Parent then
+                    ghostBtn.Text = L.prevQ
+                    tw(ghostBtn, {BackgroundColor3 = C.accDim}, 0.22)
+                    btnCol[ghostBtn] = C.accDim
+                end
+
+                refreshSel()
+                refreshGhostPreview()
+            end)
+        end)
+
+        ghostBtn.Activated:Connect(function()
+            if not S.autoLocation then
+                flashBtn(ghostBtn, L.nloc, L.prevQ)
+                return
+            end
+
+            if #S.selCars == 0 and not S.ghostVisible then
+                flashBtn(ghostBtn, L.ncars, L.prevQ)
+                return
+            end
+
+            toggleGhostPreview()
+
+            ghostBtn.Text = S.ghostVisible and L.prevQOff or L.prevQ
+
+            tw(ghostBtn, {BackgroundColor3 = S.ghostVisible and C.red or C.accDim}, 0.22)
+            btnCol[ghostBtn] = S.ghostVisible and C.red or C.accDim
+        end)
+
+        seatTglBtn.Activated:Connect(function()
+            toggleSeats()
+
+            seatTglBtn.Text = S.seatsHidden and L.seatTglOn or L.seatTgl
+
+            tw(seatTglBtn, {BackgroundColor3 = S.seatsHidden and C.green or C.orange}, 0.25, Enum.EasingStyle.Back)
+            btnCol[seatTglBtn] = S.seatsHidden and C.green or C.orange
+        end)
+
+        carHideBtn.Activated:Connect(function()
+            toggleCarsVisibility()
+
+            carHideBtn.Text = S.carsHidden and L.carShow or L.carHide
+
+            tw(carHideBtn, {BackgroundColor3 = S.carsHidden and C.teal or C.bg4}, 0.25, Enum.EasingStyle.Back)
+            btnCol[carHideBtn] = S.carsHidden and C.teal or C.bg4
+        end)
+
+        deleteOnlyBtn.Activated:Connect(function()
+            if S.deleteRunning then
+                return
+            end
+
+            Cfg.DeleteCarOnly = true
+
+            tw(deleteOnlyBtn, {BackgroundColor3 = C.acc}, 0.22, Enum.EasingStyle.Back)
+            tw(deleteWithItemsBtn, {BackgroundColor3 = C.bg4}, 0.22, Enum.EasingStyle.Back)
+        end)
+
+        deleteWithItemsBtn.Activated:Connect(function()
+            if S.deleteRunning then
+                return
+            end
+
+            Cfg.DeleteCarOnly = false
+
+            tw(deleteOnlyBtn, {BackgroundColor3 = C.bg4}, 0.22, Enum.EasingStyle.Back)
+            tw(deleteWithItemsBtn, {BackgroundColor3 = C.acc}, 0.22, Enum.EasingStyle.Back)
+        end)
+
+        deleteBtn.Activated:Connect(function()
+            if S.deleteRunning then
+                return
+            end
+
+            if #S.selCars == 0 then
+                flashBtn(deleteBtn, L.ncars, L.deleteCar)
+                return
+            end
+
+            deleteBtn.Text = L.deleteRunning
+            tw(deleteBtn, {BackgroundColor3 = C.orange}, 0.2)
+            btnCol[deleteBtn] = C.orange
+
+            tw(deleteSpeedDisplay, {Size = UDim2.new(1, -12, 0, 30)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+            task.spawn(function()
+                smartDeleteSelectedCars(deleteSpeedLbl, function()
+                    if deleteBtn and deleteBtn.Parent then
+                        deleteBtn.Text = L.deleteCar
+                        tw(deleteBtn, {BackgroundColor3 = C.red}, 0.22)
+                        btnCol[deleteBtn] = C.red
+                    end
+
+                    tw(deleteSpeedDisplay, {Size = UDim2.new(1, -12, 0, 0)}, 0.25, Enum.EasingStyle.Quint)
+
+                    refreshSel()
+                    refreshGhostPreview()
+                end)
+            end)
+        end)
+
+        ----------------------------------------------------------------
+        -- Page 4: Settings
+        ----------------------------------------------------------------
+        local p4 = pages[4]
+        y = 6
+
+        mkToggle(p4, L.esp, y, S.espEnabled, function(v)
+            S.espEnabled = v
+            buildESP()
+        end); y = y + 40
+
+        mkSep(p4, y); y = y + 10
+
+        local turboFrame = Instance.new("Frame")
+        turboFrame.Size = UDim2.new(1, -12, 0, 46)
+        turboFrame.Position = UDim2.new(0, 6, 0, y)
+        turboFrame.BackgroundColor3 = C.bg3
+        turboFrame.BorderSizePixel = 0
+        turboFrame.ZIndex = 4
+        turboFrame.Parent = p4
+
+        Instance.new("UICorner", turboFrame).CornerRadius = UDim.new(0, 10)
+
+        local turboLbl = Instance.new("TextLabel", turboFrame)
+        turboLbl.Text = L.turbo
+        turboLbl.Size = UDim2.new(1, -58, 0, 22)
+        turboLbl.Position = UDim2.new(0, 10, 0, 2)
+        turboLbl.BackgroundTransparency = 1
+        turboLbl.TextColor3 = C.txtL
+        turboLbl.Font = Enum.Font.GothamSemibold
+        turboLbl.TextSize = 10
+        turboLbl.TextXAlignment = Enum.TextXAlignment.Left
+        turboLbl.ZIndex = 5
+
+        local turboWarnLbl = Instance.new("TextLabel", turboFrame)
+        turboWarnLbl.Text = L.turboWarn
+        turboWarnLbl.Size = UDim2.new(1, -58, 0, 18)
+        turboWarnLbl.Position = UDim2.new(0, 10, 0, 22)
+        turboWarnLbl.BackgroundTransparency = 1
+        turboWarnLbl.TextColor3 = C.red
+        turboWarnLbl.Font = Enum.Font.Gotham
+        turboWarnLbl.TextSize = 8
+        turboWarnLbl.TextXAlignment = Enum.TextXAlignment.Left
+        turboWarnLbl.ZIndex = 5
+
+        local turboTrack = Instance.new("TextButton", turboFrame)
+        turboTrack.Text = ""
+        turboTrack.Size = UDim2.new(0, 44, 0, 24)
+        turboTrack.AnchorPoint = Vector2.new(1, 0.5)
+        turboTrack.Position = UDim2.new(1, -8, 0.5, 0)
+        turboTrack.BackgroundColor3 = S.turboTransfer and C.acc or C.bg0
+        turboTrack.BorderSizePixel = 0
+        turboTrack.AutoButtonColor = false
+        turboTrack.ZIndex = 5
+
+        Instance.new("UICorner", turboTrack).CornerRadius = UDim.new(1, 0)
+
+        local turboStroke = addGlow(turboTrack, S.turboTransfer and C.acc or C.sep, 1.2)
+
+        local turboKnob = Instance.new("Frame", turboTrack)
+        turboKnob.Size = UDim2.new(0, 18, 0, 18)
+        turboKnob.AnchorPoint = Vector2.new(0, 0.5)
+        turboKnob.Position = S.turboTransfer and UDim2.new(1, -20, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+        turboKnob.BackgroundColor3 = C.txtW
+        turboKnob.BorderSizePixel = 0
+        turboKnob.ZIndex = 6
+
+        Instance.new("UICorner", turboKnob).CornerRadius = UDim.new(1, 0)
+
+        local function setTurbo(v)
+            S.turboTransfer = v
+
+            tw(turboTrack, {BackgroundColor3 = v and C.acc or C.bg0}, 0.22, Enum.EasingStyle.Quint)
+            tw(turboKnob, {Position = v and UDim2.new(1, -20, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)}, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+            if turboStroke then
+                TweenService:Create(turboStroke, TweenInfo.new(0.22), {Color = v and C.acc or C.sep}):Play()
+            end
+
+            tw(turboFrame, {BackgroundColor3 = v and Color3.fromRGB(22, 18, 45) or C.bg3}, 0.22)
+        end
+
+        turboTrack.Activated:Connect(function()
+            spawnRipple(turboTrack, Vector2.new(
+                turboTrack.AbsolutePosition.X + turboTrack.AbsoluteSize.X * 0.5,
+                turboTrack.AbsolutePosition.Y + turboTrack.AbsoluteSize.Y * 0.5
+            ))
+
+            setTurbo(not S.turboTransfer)
+        end)
+
+        y = y + 52
+
+        mkSep(p4, y); y = y + 10
+
+        mkSlider(p4, L.grav, y, -200, 200, math.floor(workspace.Gravity), function(v)
+            workspace.Gravity = v
+        end, false); y = y + 62
+
+        local grstBtn = mkBtn(p4, L.grst, C.bg4, y); y = y + 40
+
+        mkSep(p4, y); y = y + 10
+
+        mkSlider(p4, L.slw, y, 5, 40, Cfg.SlotWidth, function(v)
+            Cfg.SlotWidth = v
+            refreshGhostPreview()
+        end, false); y = y + 62
+
+        mkSlider(p4, L.rsp, y, 10, 80, Cfg.RowSpacing, function(v)
+            Cfg.RowSpacing = v
+            refreshGhostPreview()
+        end, false); y = y + 62
+
+        mkSlider(p4, L.manLift, y, -5, 5, Cfg.ManualLiftOffset, function(v)
+            Cfg.ManualLiftOffset = v
+            refreshGhostPreview()
+        end, true); y = y + 62
+
+        mkSep(p4, y); y = y + 10
+
+        local langBtn = mkBtn(p4, "🌐 " .. (lang == "ar" and "English" or "العربية"), C.accDim, y); y = y + 40
+
+        p4.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+
+        grstBtn.Activated:Connect(function()
+            workspace.Gravity = 196.2
+        end)
+
+        langBtn.Activated:Connect(function()
+            cleanup()
+            clearESP()
+            clearSel()
+            clearGhosts()
+            stopLivePreview()
+
+            buildUI()
+        end)
+
+        S.uiHeartbeatConn = trackUI(RunService.Heartbeat:Connect(function()
+            if selCountLbl and selCountLbl.Parent then
+                local newT = L.selcount .. ": " .. #S.selCars .. " " .. L.cars_
+
+                if selCountLbl.Text ~= newT then
+                    selCountLbl.Text = newT
+                end
+            end
+        end))
+
+        local dragActive = false
+        local dragStart, panStart = nil, nil
+        local DRAG_THRESHOLD = 10
+
+        hdr.InputBegan:Connect(function(inp)
+            if inp.UserInputType ~= Enum.UserInputType.MouseButton1 and inp.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            local tabBarAbs = tabBar.AbsolutePosition
+            local tabBarSz = tabBar.AbsoluteSize
+
+            local px, py = inp.Position.X, inp.Position.Y
+
+            if px >= tabBarAbs.X and px <= tabBarAbs.X + tabBarSz.X
+                and py >= tabBarAbs.Y and py <= tabBarAbs.Y + tabBarSz.Y then
+                return
+            end
+
+            dragActive = true
+            S.isDragging = false
+
+            dragStart = inp.Position
+            panStart = pan.Position
+        end)
+
+        trackUI(UIS.InputChanged:Connect(function(inp)
+            if not dragActive then
+                return
+            end
+
+            if inp.UserInputType ~= Enum.UserInputType.MouseMovement and inp.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            local d = inp.Position - dragStart
+
+            if math.abs(d.X) > DRAG_THRESHOLD or math.abs(d.Y) > DRAG_THRESHOLD then
+                S.isDragging = true
+            end
+
+            if S.isDragging then
+                pan.Position = UDim2.new(
+                    panStart.X.Scale, panStart.X.Offset + d.X,
+                    panStart.Y.Scale, panStart.Y.Offset + d.Y
+                )
+            end
+        end))
+
+        trackUI(UIS.InputEnded:Connect(function(inp)
+            if inp.UserInputType ~= Enum.UserInputType.MouseButton1 and inp.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            if dragActive then
+                dragActive = false
+                S.isDragging = false
+            end
+        end))
+    end
+
+    arBtn.Activated:Connect(function()
+        buildMain("ar")
+    end)
+
+    enBtn.Activated:Connect(function()
+        buildMain("en")
+    end)
+end
+
+buildUI()
+
+----------------------------------------------------------------
+-- Click selection
+----------------------------------------------------------------
+local function getNearbyCars(centerCar)
+    local pos = centerCar:GetPivot().Position
+
+    local seen, res = {}, {}
+
+    for _, p in ipairs(workspace:GetPartBoundsInRadius(pos, 250)) do
+        local car = findCar(p)
+
+        if car and car:FindFirstChild("DriveSeat") and not seen[car] then
+            seen[car] = true
+            res[#res + 1] = car
+        end
+    end
+
+    return res
+end
+
+trackGlobal(UIS.InputBegan:Connect(function(inp, gp)
+    if gp then
+        return
+    end
+
+    if S.isDragging then
+        return
+    end
+
+    if not S.selectMode and not S.selectAll then
+        return
+    end
+
+    if inp.UserInputType ~= Enum.UserInputType.MouseButton1 and inp.UserInputType ~= Enum.UserInputType.Touch then
+        return
+    end
+
+    local cam = workspace.CurrentCamera
+    local ray = cam:ScreenPointToRay(inp.Position.X, inp.Position.Y)
+
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {
+        LP.Character,
+        ghostFolder,
+        selectionFolder,
+        espFolder,
+        seatHolder,
+        globalSeatFolder,
+    }
+
+    local res = workspace:Raycast(ray.Origin, ray.Direction * 600, rp)
+
+    if not res then
+        return
+    end
+
+    local carModel = findCar(res.Instance)
+
+    if not carModel then
+        return
+    end
+
+    if S.selectAll then
+        local nearby = getNearbyCars(carModel)
+
+        local allSel = true
+
+        for _, c in ipairs(nearby) do
+            if not S.selSeats[c] then
+                allSel = false
+                break
+            end
+        end
+
+        if allSel then
+            for _, c in ipairs(nearby) do
+                for i, x in ipairs(S.selCars) do
+                    if x == c then
+                        table.remove(S.selCars, i)
+                        break
+                    end
+                end
+
+                selUnhighlight(c)
+                S.selSeats[c] = nil
+            end
+        else
+            for _, c in ipairs(nearby) do
+                if not S.selSeats[c] then
+                    S.selCars[#S.selCars + 1] = c
+
+                    selHighlight(c)
+                    S.selSeats[c] = getSeat(c)
+                end
+            end
+        end
+
+        refreshGhostPreview()
+
+        return
+    end
+
+    if not S.selectMode then
+        return
+    end
+
+    local ds = getSeat(carModel)
+
+    if not ds then
+        return
+    end
+
+    local found = false
+
+    for i, c in ipairs(S.selCars) do
+        if c == carModel then
+            table.remove(S.selCars, i)
+
+            selUnhighlight(carModel)
+            S.selSeats[carModel] = nil
+
+            found = true
+
+            break
+        end
+    end
+
+    if not found then
+        S.selCars[#S.selCars + 1] = carModel
+
+        selHighlight(carModel)
+        S.selSeats[carModel] = ds
+    end
+
+    refreshGhostPreview()
+end))
+
+----------------------------------------------------------------
+-- Flight loop
+----------------------------------------------------------------
+trackGlobal(RunService.RenderStepped:Connect(function()
+    local car, prim, seat = getPrimary()
+
+    if not car then
+        if S.car then
+            cleanup()
+        end
+
+        return
+    end
+
+    if S.noclip then
+        for _, p in ipairs(car:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+            end
+        end
+    end
+
+    if not S.flying or S.isTp then
+        return
+    end
+
+    if S.car ~= car then
+        cleanup()
+        S.car = car
+    end
+
+    if not (S.bv and S.bv.Parent) then
+        local bv = Instance.new("BodyVelocity")
+        bv.Name = "FlyBV"
+        bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        bv.Velocity = Vector3.zero
+        bv.Parent = prim
+
+        S.bv = bv
+    end
+
+    local cam = workspace.CurrentCamera
+
+    local look = cam.CFrame.LookVector
+    local right = cam.CFrame.RightVector
+
+    local rightF = Vector3.new(right.X, 0, right.Z)
+
+    if rightF.Magnitude > 0.01 then
+        rightF = rightF.Unit
+    end
+
+    local spd = Cfg.FlySpeed
+
+    local vel = (look * seat.Throttle * spd) + (rightF * seat.Steer * spd)
+
+    local up = 0
+
+    if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.Q) then
+        up = 1
+    elseif UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.E) then
+        up = -1
+    end
+
+    vel = vel + Vector3.new(0, up * spd, 0)
+
+    S.bv.Velocity = S.bv.Velocity:Lerp(vel, Cfg.Smooth)
+end))
+
+trackGlobal(RunService.Heartbeat:Connect(function()
+    if S.flying and S.car and not S.isTp then
+        local prim = S.car.PrimaryPart
+
+        if prim then
+            local cam = workspace.CurrentCamera
+            local look = cam.CFrame.LookVector
+
+            if look.Magnitude > 0.01 then
+                local pos = prim.Position
+                prim.CFrame = CFrame.new(pos, pos + look)
+            end
+        end
+    end
+
+    local ch = LP.Character
+
+    if ch then
+        local hm = ch:FindFirstChildOfClass("Humanoid")
+        local seat = hm and hm.SeatPart
+
+        if seat ~= S.lastSeat then
+            S.lastSeat = seat
+
+            if seat and seat:IsA("VehicleSeat") and S.autoEnabled and not S.queueRunning then
+                local car = findCar(seat) or seat.Parent
+
+                if car then
+                    task.spawn(doAutoTp, car)
+                end
+            end
+        end
+    end
+end))
