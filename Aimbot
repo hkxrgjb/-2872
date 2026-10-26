@@ -1,0 +1,622 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local WS = game:GetService("Workspace")
+local LP = Players.LocalPlayer
+
+local S = {
+    Enabled = true, WallCheck = true, AutoAim = true, Prediction = true,
+    SmartBone = true, TeamCheck = true, ShowFOV = true,
+    FOV = 160, Smoothness = 0.25, Strength = 0.85, PredAmount = 1.2,
+    DynamicOffset = 0.015, TargetPart = "Head"
+}
+
+local Target, Locked = nil, nil
+local FOVCircle
+local TargetPartName = "Head"
+local isKilling = false
+
+local function getChar(p) return p and p.Character end
+local function alive(p)
+    local c = getChar(p)
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+local function isMate(p)
+    if not S.TeamCheck then return false end
+    return p.Team ~= nil and p.Team == LP.Team
+end
+
+local function hasLOS(part)
+    if not S.WallCheck then return true end
+    local cam = WS.CurrentCamera
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {LP.Character, cam}
+    local ray = WS:Raycast(cam.CFrame.Position, part.Position - cam.CFrame.Position, rp)
+    if ray then
+        if ray.Instance:IsDescendantOf(part.Parent) or ray.Instance.Transparency > 0.8 then
+            return true
+        end
+        return false
+    end
+    return true
+end
+
+local function getBestPart(p)
+    local c = getChar(p)
+    if not c then return nil, "None" end
+    if S.SmartBone then
+        local partsToCheck = {"Head", "UpperTorso", "Torso", "HumanoidRootPart"}
+        for _, pName in ipairs(partsToCheck) do
+            local part = c:FindFirstChild(pName)
+            if part and hasLOS(part) then
+                return part, pName
+            end
+        end
+        return nil, "Blocked"
+    else
+        local part = c:FindFirstChild(S.TargetPart)
+        if part and hasLOS(part) then
+            return part, S.TargetPart
+        end
+        return nil, "Blocked"
+    end
+end
+
+local function getAimPosition(part)
+    if not part then return Vector3.new() end
+    local pos = part.Position
+    local dist = (pos - WS.CurrentCamera.CFrame.Position).Magnitude
+    local offsetY = dist * S.DynamicOffset
+    pos = pos + Vector3.new(0, offsetY, 0)
+
+    if S.Prediction then
+        local velocity = part.AssemblyLinearVelocity
+        local t = (dist / 1500) * S.PredAmount
+        pos = pos + (velocity * t)
+    end
+    return pos
+end
+
+local function getTarget()
+    local bestTarget, bestDist = nil, S.FOV
+    local center = Vector2.new(WS.CurrentCamera.ViewportSize.X/2, WS.CurrentCamera.ViewportSize.Y/2)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and alive(p) and not isMate(p) then
+            local part = getBestPart(p)
+            if part then
+                local screenPos, onScreen = WS.CurrentCamera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                    if dist < bestDist then
+                        bestDist = dist
+                        bestTarget = p
+                    end
+                end
+            end
+        end
+    end
+    return bestTarget
+end
+
+local function doAim(target, dt)
+    if not target then return end
+    local part, partName = getBestPart(target)
+    if not part then return end
+    TargetPartName = partName
+    local cam = WS.CurrentCamera
+    local aimPos = getAimPosition(part)
+    if (aimPos - cam.CFrame.Position).Magnitude < 1 then return end
+    local targetCFrame = CFrame.new(cam.CFrame.Position, aimPos)
+    local smoothFactor = 1 - S.Smoothness
+    local alpha = math.clamp(smoothFactor * S.Strength * (dt * 60), 0, 1)
+    pcall(function() cam.CFrame = cam.CFrame:Lerp(targetCFrame, alpha) end)
+end
+
+local function equipWeapon()
+    local myChar = LP.Character
+    if not myChar then return nil end
+    local tool = myChar:FindFirstChildOfClass("Tool")
+    if not tool then
+        local backpack = LP:FindFirstChild("Backpack")
+        if backpack then
+            tool = backpack:FindFirstChildOfClass("Tool")
+            if tool then tool.Parent = myChar end
+        end
+    end
+    return tool
+end
+
+local function stopKilling()
+    isKilling = false
+    statusBar.Text = "⏹️ Kill Stopped."
+    statusBar.TextColor3 = Color3.fromRGB(255, 150, 0)
+end
+
+local function killTarget(targetPlayer)
+    if isKilling or not targetPlayer or not targetPlayer.Character then return end
+    local myChar = LP.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
+    
+    isKilling = true
+    local originalCFrame = myChar.HumanoidRootPart.CFrame
+    local targetChar = targetPlayer.Character
+    local targetHum = targetChar:FindFirstChildOfClass("Humanoid")
+    
+    statusBar.Text = "⏳ Attacking " .. targetPlayer.Name .. "..."
+    statusBar.TextColor3 = Color3.fromRGB(255, 100, 100)
+    
+    local tool = equipWeapon()
+    if not tool then
+        statusBar.Text = "❌ لا يوجد سلاح في الحقيبة!"
+        isKilling = false
+        return
+    end
+
+    task.spawn(function()
+        while isKilling do
+            local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.Health = hum.MaxHealth
+            end
+            for _, v in ipairs(WS:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    if v.Color == Color3.fromRGB(255, 0, 0) or v.BrickColor == BrickColor.new("Really red") then
+                        v.CanTouch = false
+                        v.CanCollide = false
+                    end
+                end
+            end
+            task.wait(0.2)
+        end
+    end)
+
+    local angle = 0
+    local snapCam = true
+    
+    while targetChar and targetChar.Parent and targetHum and targetHum.Health > 0 and isKilling and alive(LP) do
+        tool = equipWeapon()
+        if targetChar:FindFirstChildOfClass("ForceField") then
+            statusBar.Text = "🛡️ ينتظر اختفاء الدرع..."
+            task.wait(0.5)
+        else
+            local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+            if not targetHRP then break end
+            
+            angle = angle + math.rad(15)
+            local radius = 8
+            local height = 7
+            local newPos = targetHRP.Position + Vector3.new(math.cos(angle) * radius, height, math.sin(angle) * radius)
+            
+            pcall(function()
+                myChar.HumanoidRootPart.CFrame = CFrame.new(newPos, targetHRP.Position)
+                myChar.HumanoidRootPart.Velocity = Vector3.new(0,0,0)
+            end)
+
+            pcall(function()
+                local cam = WS.CurrentCamera
+                local aimPos = getAimPosition(targetHRP)
+                local targetCFrame = CFrame.new(cam.CFrame.Position, aimPos)
+                if snapCam then
+                    cam.CFrame = targetCFrame
+                    snapCam = false
+                else
+                    cam.CFrame = cam.CFrame:Lerp(targetCFrame, 0.8)
+                end
+            end)
+
+            if tool then
+                pcall(function() tool:Activate() end)
+            end
+        end
+        task.wait(0.05)
+    end
+
+    if myChar and myChar:FindFirstChild("HumanoidRootPart") and isKilling then
+        pcall(function() myChar.HumanoidRootPart.CFrame = originalCFrame end)
+        statusBar.Text = "✅ Finished killing " .. targetPlayer.Name
+    end
+    isKilling = false
+end
+
+local uiLayer = Instance.new("ScreenGui")
+uiLayer.Name = "ProAimbot_UI"
+uiLayer.ResetOnSpawn = false
+uiLayer.DisplayOrder = 10
+uiLayer.Parent = LP:WaitForChild("PlayerGui")
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 460, 0, 270)
+main.Position = UDim2.new(0.5, -230, 0.5, -135)
+main.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+main.BorderSizePixel = 0
+main.Active = true
+main.ClipsDescendants = true
+main.Parent = uiLayer
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = Color3.fromRGB(0, 170, 255)
+stroke.Thickness = 1
+stroke.Transparency = 0.5
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 36)
+header.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+header.BorderSizePixel = 0
+header.Parent = main
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
+
+local hTitle = Instance.new("TextLabel")
+hTitle.Size = UDim2.new(1, -90, 1, 0)
+hTitle.Position = UDim2.new(0, 12, 0, 0)
+hTitle.BackgroundTransparency = 1
+hTitle.Text = "⚡ Pro Aimbot v13"
+hTitle.TextColor3 = Color3.fromRGB(0, 190, 255)
+hTitle.TextSize = 14
+hTitle.Font = Enum.Font.GothamBold
+hTitle.TextXAlignment = Enum.TextXAlignment.Left
+hTitle.Parent = header
+
+local minBtn = Instance.new("TextButton")
+minBtn.Size = UDim2.new(0, 26, 0, 26)
+minBtn.Position = UDim2.new(1, -62, 0, 5)
+minBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+minBtn.Text = "−"
+minBtn.TextColor3 = Color3.new(1,1,1)
+minBtn.Font = Enum.Font.GothamBold
+minBtn.Parent = header
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
+
+local clsBtn = Instance.new("TextButton")
+clsBtn.Size = UDim2.new(0, 26, 0, 26)
+clsBtn.Position = UDim2.new(1, -32, 0, 5)
+clsBtn.BackgroundColor3 = Color3.fromRGB(70, 35, 35)
+clsBtn.Text = "✕"
+clsBtn.TextColor3 = Color3.new(1,1,1)
+clsBtn.Font = Enum.Font.GothamBold
+clsBtn.Parent = header
+Instance.new("UICorner", clsBtn).CornerRadius = UDim.new(0, 6)
+
+local tabsBar = Instance.new("Frame")
+tabsBar.Size = UDim2.new(0, 80, 1, -56)
+tabsBar.Position = UDim2.new(0, 8, 0, 40)
+tabsBar.BackgroundTransparency = 1
+tabsBar.Parent = main
+local tl = Instance.new("UIListLayout", tabsBar)
+tl.Padding = UDim.new(0, 4)
+
+local content = Instance.new("ScrollingFrame")
+content.Size = UDim2.new(1, -100, 1, -56)
+content.Position = UDim2.new(0, 92, 0, 40)
+content.BackgroundTransparency = 1
+content.ScrollBarThickness = 3
+content.ScrollBarImageColor3 = Color3.fromRGB(0, 170, 255)
+content.CanvasSize = UDim2.new(0, 0, 0, 0)
+content.Parent = main
+local cl = Instance.new("UIListLayout", content)
+cl.Padding = UDim.new(0, 5)
+cl.SortOrder = Enum.SortOrder.LayoutOrder
+
+statusBar = Instance.new("TextLabel")
+statusBar.Size = UDim2.new(1, -100, 0, 14)
+statusBar.Position = UDim2.new(0, 92, 1, -18)
+statusBar.BackgroundTransparency = 1
+statusBar.Text = "🎯 Searching..."
+statusBar.TextColor3 = Color3.fromRGB(0, 190, 255)
+statusBar.TextSize = 10
+statusBar.Font = Enum.Font.Gotham
+statusBar.TextXAlignment = Enum.TextXAlignment.Left
+statusBar.Parent = main
+
+local tabPages = {}
+local function switchTab(name)
+    for n, page in pairs(tabPages) do page.Visible = (n == name) end
+    for _, btn in pairs(tabsBar:GetChildren()) do
+        if btn:IsA("TextButton") then
+            btn.BackgroundColor3 = (btn.Name == name) and Color3.fromRGB(0, 150, 220) or Color3.fromRGB(35, 35, 45)
+        end
+    end
+end
+
+local function addTab(name, label)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    btn.Text = label
+    btn.TextColor3 = Color3.fromRGB(220, 220, 220)
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamBold
+    btn.AutoButtonColor = false
+    btn.Parent = tabsBar
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    btn.MouseButton1Click:Connect(function() switchTab(name) end)
+end
+addTab("Main", "الرئيسية")
+addTab("Aim", "التصويب")
+addTab("Kill", "القتل")
+addTab("Advanced", "متقدم")
+
+local function newPage(name, order)
+    local p = Instance.new("Frame")
+    p.Name = name
+    p.Size = UDim2.new(1, 0, 0, 0)
+    p.AutomaticSize = Enum.AutomaticSize.Y
+    p.BackgroundTransparency = 1
+    p.LayoutOrder = order
+    p.Parent = content
+    local l = Instance.new("UIListLayout", p)
+    l.Padding = UDim.new(0, 5)
+    tabPages[name] = p
+end
+newPage("Main", 1)
+newPage("Aim", 2)
+newPage("Kill", 3)
+newPage("Advanced", 4)
+
+local function row(parent, text, default, cb)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, 0, 0, 32)
+    f.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    f.Parent = parent
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+    
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -55, 1, 0)
+    lbl.Position = UDim2.new(0, 10, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = Color3.fromRGB(230, 230, 230)
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = f
+    
+    local sw = Instance.new("TextButton")
+    sw.Size = UDim2.new(0, 34, 0, 17)
+    sw.Position = UDim2.new(1, -44, 0.5, -8.5)
+    sw.BackgroundColor3 = default and Color3.fromRGB(0, 180, 120) or Color3.fromRGB(55, 55, 65)
+    sw.Text = ""
+    sw.AutoButtonColor = false
+    sw.Parent = f
+    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+    
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 13, 0, 13)
+    knob.BackgroundColor3 = Color3.new(1,1,1)
+    knob.Position = default and UDim2.new(1, -15, 0.5, -6.5) or UDim2.new(0, 2, 0.5, -6.5)
+    knob.Parent = sw
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+    
+    local state = default
+    sw.MouseButton1Click:Connect(function()
+        state = not state
+        TS:Create(sw, TweenInfo.new(0.15), {
+            BackgroundColor3 = state and Color3.fromRGB(0, 180, 120) or Color3.fromRGB(55, 55, 65)
+        }):Play()
+        TS:Create(knob, TweenInfo.new(0.15), {
+            Position = state and UDim2.new(1, -15, 0.5, -6.5) or UDim2.new(0, 2, 0.5, -6.5)
+        }):Play()
+        cb(state)
+    end)
+end
+
+local function sliderRow(parent, text, min, max, default, cb, isInt)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, 0, 0, 46)
+    f.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    f.Parent = parent
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+    
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -20, 0, 16)
+    lbl.Position = UDim2.new(0, 10, 0, 4)
+    lbl.BackgroundTransparency = 1
+    local fmt = isInt and "%.0f" or "%.3f"
+    lbl.Text = text .. "  ·  " .. string.format(fmt, default)
+    lbl.TextColor3 = Color3.fromRGB(230, 230, 230)
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = f
+    
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(1, -20, 0, 5)
+    bar.Position = UDim2.new(0, 10, 0, 28)
+    bar.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    bar.Parent = f
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+    
+    local pct = (default - min) / (max - min)
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(pct, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+    fill.Parent = bar
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+    
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 13, 0, 13)
+    knob.Position = UDim2.new(pct, -6.5, 0.5, -6.5)
+    knob.BackgroundColor3 = Color3.new(1,1,1)
+    knob.Parent = bar
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+    
+    local drag = false
+    local function upd(inp)
+        local rx = math.clamp((inp.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+        local v = min + (max - min) * rx
+        fill.Size = UDim2.new(rx, 0, 1, 0)
+        knob.Position = UDim2.new(rx, -6.5, 0.5, -6.5)
+        lbl.Text = text .. "  ·  " .. string.format(fmt, v)
+        cb(v)
+    end
+    bar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            drag = true; upd(i)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then upd(i) end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+    end)
+end
+
+local pMain = tabPages.Main
+row(pMain, "تفعيل الأيم بوت (Master)", S.Enabled, function(v) S.Enabled = v end)
+row(pMain, "تصويب تلقائي مستمر", S.AutoAim, function(v) S.AutoAim = v end)
+row(pMain, "اختيار أفضل زاوية (Smart Bone)", S.SmartBone, function(v) S.SmartBone = v end)
+row(pMain, "فحص الجدار (Wall Check)", S.WallCheck, function(v) S.WallCheck = v end)
+row(pMain, "تجاهل الفريق", S.TeamCheck, function(v) S.TeamCheck = v end)
+
+local pAim = tabPages.Aim
+sliderRow(pAim, "نطاق التصويب (FOV)", 30, 400, S.FOV, function(v) S.FOV = v end, true)
+sliderRow(pAim, "السلاسة", 0, 100, S.Smoothness * 100, function(v) S.Smoothness = v / 100 end, true)
+sliderRow(pAim, "قوة السحب", 0, 100, S.Strength * 100, function(v) S.Strength = v / 100 end, true)
+row(pAim, "إظهار FOV", S.ShowFOV, function(v) S.ShowFOV = v end)
+
+local pAdv = tabPages.Advanced
+row(pAdv, "تفعيل التنبؤ بالحركة", S.Prediction, function(v) S.Prediction = v end)
+sliderRow(pAdv, "قوة التنبؤ", 0, 3, S.PredAmount, function(v) S.PredAmount = v end)
+sliderRow(pAdv, "ارتفاع الأيم للمسافات البعيدة", 0, 0.05, S.DynamicOffset, function(v) S.DynamicOffset = v end)
+
+local pKill = tabPages.Kill
+local killAllBtn = Instance.new("TextButton")
+killAllBtn.Size = UDim2.new(1, 0, 0, 34)
+killAllBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+killAllBtn.Text = "💀 قتل جميع اللاعبين"
+killAllBtn.TextColor3 = Color3.new(1,1,1)
+killAllBtn.TextSize = 12
+killAllBtn.Font = Enum.Font.GothamBold
+killAllBtn.Parent = pKill
+Instance.new("UICorner", killAllBtn).CornerRadius = UDim.new(0, 8)
+killAllBtn.MouseButton1Click:Connect(function()
+    if isKilling then return end
+    task.spawn(function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and alive(p) and isKilling then
+                killTarget(p)
+                task.wait(1.5)
+            end
+        end
+    end)
+end)
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Size = UDim2.new(1, 0, 0, 30)
+stopBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+stopBtn.Text = "⏹️ إيقاف القتل والعودة"
+stopBtn.TextColor3 = Color3.new(1,1,1)
+stopBtn.TextSize = 11
+stopBtn.Font = Enum.Font.GothamBold
+stopBtn.Parent = pKill
+Instance.new("UICorner", stopBtn).CornerRadius = UDim.new(0, 8)
+stopBtn.MouseButton1Click:Connect(stopKilling)
+
+local playerList = Instance.new("ScrollingFrame")
+playerList.Size = UDim2.new(1, 0, 0, 110)
+playerList.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+playerList.BorderSizePixel = 0
+playerList.ScrollBarThickness = 2
+playerList.Parent = pKill
+Instance.new("UICorner", playerList).CornerRadius = UDim.new(0, 8)
+local plLayout = Instance.new("UIListLayout", playerList)
+plLayout.Padding = UDim.new(0, 2)
+
+local function refreshPlayerList()
+    for _, child in pairs(playerList:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and alive(p) then
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, 0, 0, 24)
+            b.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+            b.Text = "Kill " .. p.Name
+            b.TextColor3 = Color3.fromRGB(255, 100, 100)
+            b.TextSize = 11
+            b.Font = Enum.Font.GothamBold
+            b.Parent = playerList
+            b.MouseButton1Click:Connect(function() killTarget(p) end)
+        end
+    end
+    playerList.CanvasSize = UDim2.new(0, 0, 0, plLayout.AbsoluteContentSize.Y)
+end
+
+Players.PlayerAdded:Connect(refreshPlayerList)
+Players.PlayerRemoving:Connect(refreshPlayerList)
+task.spawn(function() while task.wait(2) do refreshPlayerList() end end)
+
+switchTab("Main")
+cl:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    content.CanvasSize = UDim2.new(0, 0, 0, cl.AbsoluteContentSize.Y + 10)
+end)
+
+local dragging, dragStart, startPos = false, nil, nil
+header.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = i.Position; startPos = main.Position
+    end
+end)
+UIS.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        local d = i.Position - dragStart
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    tabsBar.Visible = not minimized; content.Visible = not minimized; statusBar.Visible = not minimized
+    minBtn.Text = minimized and "+" or "−"
+    main.Size = minimized and UDim2.new(0, 460, 0, 36) or UDim2.new(0, 460, 0, 270)
+end)
+clsBtn.MouseButton1Click:Connect(function()
+    isKilling = false
+    uiLayer:Destroy()
+    if FOVCircle then FOVCircle:Remove() end
+end)
+
+RunService.RenderStepped:Connect(function(deltaTime)
+    if not FOVCircle then
+        FOVCircle = Drawing.new("Circle")
+        FOVCircle.Thickness = 1.5; FOVCircle.NumSides = 60
+        FOVCircle.Transparency = 0.6; FOVCircle.Color = Color3.fromRGB(0, 170, 255); FOVCircle.Filled = false
+    end
+    FOVCircle.Visible = S.ShowFOV and S.Enabled
+    if FOVCircle.Visible then
+        FOVCircle.Position = Vector2.new(WS.CurrentCamera.ViewportSize.X/2, WS.CurrentCamera.ViewportSize.Y/2)
+        FOVCircle.Radius = S.FOV
+    end
+    
+    if not S.Enabled then
+        statusBar.Text = "🎯 Aimbot: OFF"
+        return
+    end
+
+    if not isKilling then
+        if Locked and alive(Locked) and not isMate(Locked) then
+            Target = Locked
+        else
+            Locked = nil
+            Target = getTarget()
+        end
+
+        if Target then
+            doAim(Target, deltaTime)
+            statusBar.Text = "🎯 " .. Target.Name .. "  |  " .. TargetPartName
+            statusBar.TextColor3 = Color3.fromRGB(0, 190, 255)
+        else
+            statusBar.Text = "🎯 Searching for target..."
+            statusBar.TextColor3 = Color3.fromRGB(120, 120, 120)
+        end
+    end
+end)
