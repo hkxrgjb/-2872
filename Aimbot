@@ -1,7 +1,8 @@
 -- ===================================================
--- Pro Aimbot v5.0 (mobile first)
--- Intercept solver | Smart targeting | Trigger bot | Tap-to-lock | Radar
--- Full ESP | Weapon profiles | Profiles | Search | Diagnostics | Themes
+-- Pro Aimbot v6.0 (mobile first)
+-- Nearest 360 lock | Smart / threat targeting | Lock memory | Intercept solver
+-- Hit analytics | Off-screen arrows | Threat alerts | Event log | Waypoints
+-- Trigger bot | Radar | Full ESP | Weapon profiles | Profiles | Search | Themes
 -- ===================================================
 
 local Players = game:GetService("Players")
@@ -67,12 +68,23 @@ local DEFAULTS = {
     -- v5 kill
     KillPattern = "Orbit", KillOrder = "Nearest",
     -- players / storage
+    -- v6 targeting
+    TargetScope = "FOV", NearestLock = false, SkipShielded = true, SwitchDelay = 0.25, LockMemory = 0.4,
+    -- v6 aim / prediction
+    SnapOnAcquire = false, PredModel = "Adaptive",
+    -- v6 feedback and awareness
+    HitFeedback = true, ThreatAlert = false, AlertRange = 45, ESPArrows = true,
+    -- v6 interface / input
+    Hotkeys = false, HudPos = {},
+    -- v6 kill and utility
+    KillSafeHP = 0, Waypoints = {}, WaypointSlot = "1",
+    -- players / storage
     PriorityId = 0, Whitelist = {}, ProfileSlot = "1", Weapons = {}, Profiles = {},
 }
 
 local Settings = deepCopy(DEFAULTS)
 
-local CONFIG_FILE = "ProAimbot_v5.json"
+local CONFIG_FILE = "ProAimbot_v6.json"
 local saveDirty = false
 
 local function saveConfig()
@@ -90,8 +102,14 @@ local function loadConfig()
     pcall(function()
         local file = CONFIG_FILE
         if not isfile(file) then
-            file = "ProAimbot_v4.json"   -- migrate settings from v4
-            if not isfile(file) then return end
+            -- migrate settings from an older version
+            if isfile("ProAimbot_v5.json") then
+                file = "ProAimbot_v5.json"
+            elseif isfile("ProAimbot_v4.json") then
+                file = "ProAimbot_v4.json"
+            else
+                return
+            end
         end
         local data = HttpService:JSONDecode(readfile(file))
         if type(data) ~= "table" then return end
@@ -131,7 +149,8 @@ local function setSetting(key, value)
 end
 
 local BONES = { "Head", "Torso", "HumanoidRootPart" }
-local TARGET_MODES = { "Crosshair", "Distance", "Health" }
+local TARGET_MODES = { "Crosshair", "Distance", "Health", "Threat", "Smart" }
+local TARGET_SCOPES = { "FOV", "Screen", "Global" }
 
 local THEMES = {
     Blue   = { Color3.fromRGB(0, 170, 255),   Color3.fromRGB(0, 130, 200) },
@@ -183,8 +202,19 @@ local fpsEMA, autoPerfOn = 60, false
 local currentWeapon = nil
 local weaponInfoLabel, sessionInfoLabel, diagLabel = nil, nil, nil
 local searchBox = nil
-local stats = { locks = 0, kills = 0, errors = 0, start = os.clock() }
+local stats = { locks = 0, kills = 0, errors = 0, hits = 0, damage = 0, shots = 0, start = os.clock() }
 local diag = { selMs = 0, lead = 0, drop = 0 }
+local weaponConn, lastShot = nil, 0
+local lockHidden, lastGood, targetSince, acquireBoostUntil, hitFlashUntil = false, 0, 0, 0, 0
+local hitTrack = { target = nil, hp = 0 }
+local frameMs = 0
+local logInfoLabel = nil
+local eventLog = {}
+
+local function logEvent(text)
+    table.insert(eventLog, os.date("%H:%M:%S") .. "  " .. text)
+    if #eventLog > 60 then table.remove(eventLog, 1) end
+end
 
 local cleanup  -- assigned at the bottom
 
@@ -196,6 +226,7 @@ local function setStatus(text, color)
 end
 
 local function toast(text, color, duration)
+    logEvent(text)
     toastText = text
     toastColor = color or C.accent
     toastUntil = os.clock() + (duration or 2)
@@ -503,6 +534,7 @@ end
 
 function trackerPredict(T, now, lead)
     local d = math.clamp((now - T.time) + lead, 0, 0.6)
+    if Settings.PredModel == "Linear" then return T.pos + T.vel * d end
     return T.pos + T.vel * d + T.acc * (0.5 * d * d)
 end
 end -- tracker
@@ -618,41 +650,98 @@ end
 local function setTarget(plr, part)
     if plr ~= CurrentTarget then
         aimTracker = newTracker()
-        if plr ~= nil then stats.locks = stats.locks + 1 end
+        targetSince = os.clock()
+        hitTrack.target = nil
+        if plr ~= nil then
+            stats.locks = stats.locks + 1
+            acquireBoostUntil = os.clock() + 0.15
+            logEvent("Lock: " .. plr.Name)
+        end
     end
+    if plr == nil then lockHidden = false end
     CurrentTarget, CurrentPart = plr, part
 end
 
 local selectTarget
 do
--- Returns part, screenDistance, worldDistance if the player can be aimed at
+-- NearestLock overrides scope and mode: always the closest enemy, 360 degrees around you
+local function effectiveScope()
+    if Settings.NearestLock then return "Global" end
+    return Settings.TargetScope
+end
+
+local function effectiveMode()
+    if Settings.NearestLock then return "Distance" end
+    return Settings.TargetMode
+end
+
+-- angle in degrees between the camera look direction and a world position
+local function angleTo(camCF, pos)
+    local d = pos - camCF.Position
+    if d.Magnitude < 0.01 then return 0 end
+    local u = d.Unit
+    local look = camCF.LookVector
+    return math.deg(math.atan2(look:Cross(u).Magnitude, look:Dot(u)))
+end
+
+-- Returns part, rank (pixels, or degrees in Global scope), worldDistance
+-- when the player can be aimed at
 local function evaluate(plr, now, fovMult, camPos)
     if not isValidTarget(plr) then return nil end
     if (skipUntil[plr.UserId] or 0) > now then return nil end
-    local root = getRoot(plr.Character)
+    local char = plr.Character
+    if Settings.SkipShielded and char:FindFirstChildOfClass("ForceField") then return nil end
+    local root = getRoot(char)
     if not root then return nil end
     local worldDist = (root.Position - camPos).Magnitude
     if worldDist > Settings.MaxDistance then return nil end
 
+    local scope = effectiveScope()
     local fov = Settings.FOV * fovMult
-    -- cheap check first, raycasts only for real candidates
-    local rootScreen = screenDistance(root.Position)
-    if not rootScreen or rootScreen > fov + 60 then return nil end
+    if scope ~= "Global" then
+        -- cheap check first, raycasts only for real candidates
+        local rootScreen = screenDistance(root.Position)
+        if not rootScreen then return nil end
+        if scope == "FOV" and rootScreen > fov + 60 then return nil end
+    end
     local part = getBestPart(plr)
     if not part then return nil end
-    local sd = screenDistance(part.Position)
-    if not sd or sd > fov then return nil end
-    return part, sd, worldDist
+
+    local rank
+    if scope == "Global" then
+        rank = angleTo(camera().CFrame, part.Position)
+    else
+        rank = screenDistance(part.Position)
+        if not rank then return nil end
+        if scope == "FOV" and rank > fov then return nil end
+    end
+    return part, rank, worldDist
 end
 
-local function scoreFor(plr, screenDist, worldDist)
-    local mode = Settings.TargetMode
+-- lower score = better target
+local function scoreFor(plr, part, rank, worldDist)
+    local mode = effectiveMode()
     if mode == "Distance" then return worldDist end
-    if mode == "Health" then
-        local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
-        return hum and hum.Health or math.huge
+    local char = plr.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if mode == "Health" then return hum and hum.Health or math.huge end
+    if mode == "Threat" or mode == "Smart" then
+        -- how directly the enemy faces me: 1 = looking straight at me
+        local facing = 0
+        local root = getRoot(char)
+        local myRoot = getRoot(LocalPlayer.Character)
+        if root and myRoot then
+            local toMe = myRoot.Position - root.Position
+            if toMe.Magnitude > 0.1 then facing = root.CFrame.LookVector:Dot(toMe.Unit) end
+        end
+        local score = worldDist * (1.5 - facing)
+        if mode == "Smart" then
+            score = score + (hum and hum.Health or 100) * 0.3
+                + angleTo(camera().CFrame, part.Position) * 2
+        end
+        return score
     end
-    return screenDist
+    return rank
 end
 
 function selectTarget(now)
@@ -667,32 +756,45 @@ function selectTarget(now)
         if plr then
             local part = evaluate(plr, now, 2.0, camPos)
             if part then
+                lockHidden, lastGood = false, now
                 setTarget(plr, part)
                 return
             end
         end
     end
 
-    -- 2) keep the current target (sticky)
-    if Settings.Sticky and CurrentTarget then
+    -- 2) keep the current target
+    if CurrentTarget and isValidTarget(CurrentTarget) then
         local part = evaluate(CurrentTarget, now, 1.4, camPos)
-        if part then
+        if part and (Settings.Sticky or now - targetSince < Settings.SwitchDelay) then
             CurrentPart = part
+            lockHidden, lastGood = false, now
             return
+        end
+        -- briefly hidden (pillar, corner): keep following it for LockMemory seconds
+        if not part and Settings.LockMemory > 0 and now - lastGood < Settings.LockMemory then
+            local root = getRoot(CurrentTarget.Character)
+            if root then
+                CurrentPart = root
+                lockHidden = true
+                return
+            end
         end
     end
 
     -- 3) best target by the selected mode
     local bestPlr, bestPart, bestScore = nil, nil, math.huge
     for _, plr in ipairs(Players:GetPlayers()) do
-        local part, sd, wd = evaluate(plr, now, 1.0, camPos)
+        local part, rank, wd = evaluate(plr, now, 1.0, camPos)
         if part then
-            local score = scoreFor(plr, sd, wd)
+            local score = scoreFor(plr, part, rank, wd)
             if score < bestScore then
                 bestScore, bestPlr, bestPart = score, plr, part
             end
         end
     end
+    lockHidden = false
+    if bestPart then lastGood = now end
     setTarget(bestPlr, bestPart)
 end
 
@@ -722,12 +824,28 @@ local function updateWeaponProfile(now)
     local name = tool and tool.Name or nil
     if name == currentWeapon then return end
     currentWeapon = name
+    logEvent("Weapon: " .. (name or "none"))
+
+    -- count every shot (manual taps and script shots) for the analytics
+    if weaponConn then
+        weaponConn:Disconnect()
+        weaponConn = nil
+    end
+    if tool then
+        weaponConn = tool.Activated:Connect(function()
+            lastShot = os.clock()
+            stats.shots = stats.shots + 1
+        end)
+    end
     if name and Settings.WeaponProfiles then
         local prof = Settings.Weapons[name]
         if type(prof) == "table" and type(prof.BulletSpeed) == "number" then
             setSetting("BulletSpeed", prof.BulletSpeed)
             if type(prof.BulletGravity) == "number" then
                 setSetting("BulletGravity", prof.BulletGravity)
+            end
+            if type(prof.FireDelay) == "number" then
+                setSetting("FireDelay", prof.FireDelay)
             end
             toast("Weapon profile: " .. name, C.accent, 1.5)
         end
@@ -741,6 +859,7 @@ local function saveWeaponProfile()
     end
     Settings.Weapons[currentWeapon] = {
         BulletSpeed = Settings.BulletSpeed, BulletGravity = Settings.BulletGravity,
+        FireDelay = Settings.FireDelay,
     }
     saveDirty = true
     toast("Saved profile: " .. currentWeapon, C.good, 2)
@@ -754,6 +873,38 @@ local function deleteWeaponProfile()
     else
         toast("No profile for this weapon", C.idle, 2)
     end
+end
+
+-- ============================================================
+-- Waypoints: five saved positions you can jump back to
+-- ============================================================
+local function saveWaypoint()
+    local root = getRoot(LocalPlayer.Character)
+    if not root then
+        toast("No character", C.warn, 2)
+        return
+    end
+    local p = root.Position
+    Settings.Waypoints[Settings.WaypointSlot] = { p.X, p.Y, p.Z }
+    saveDirty = true
+    toast("Waypoint " .. Settings.WaypointSlot .. " saved", C.good, 2)
+end
+
+local function gotoWaypoint()
+    local w = Settings.Waypoints[Settings.WaypointSlot]
+    if type(w) ~= "table" or type(w[1]) ~= "number" or type(w[2]) ~= "number" or type(w[3]) ~= "number" then
+        toast("Waypoint " .. Settings.WaypointSlot .. " is empty", C.warn, 2)
+        return
+    end
+    if isKilling then
+        toast("Stop the kill run first", C.warn, 2)
+        return
+    end
+    local root = getRoot(LocalPlayer.Character)
+    if not root then return end
+    root.CFrame = CFrame.new(w[1], w[2] + 3, w[3])
+    root.AssemblyLinearVelocity = Vector3.zero
+    toast("Teleported to waypoint " .. Settings.WaypointSlot, C.accent, 2)
 end
 
 -- ============================================================
@@ -882,6 +1033,9 @@ local function attackTarget(targetPlayer, skipShielded)
         local myRoot = getRoot(myChar)
         local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
         if not myRoot or not myHum or myHum.Health <= 0 then return "died" end
+        if Settings.KillSafeHP > 0 and myHum.Health < myHum.MaxHealth * Settings.KillSafeHP / 100 then
+            return "retreat"
+        end
 
         local tChar = targetPlayer.Character
         local tRoot = getRoot(tChar)
@@ -966,6 +1120,8 @@ function startSingleKill(plr)
             toast("Kill stopped", C.warn, 2)
         elseif result == "died" then
             toast("You died", C.bad, 2.5)
+        elseif result == "retreat" then
+            toast("Retreated (low HP)", C.warn, 2.5)
         end
     end)
 end
@@ -999,7 +1155,7 @@ function startKillAll()
             if isValidTarget(plr) then
                 local result = attackTarget(plr, true)
                 if result == "killed" then kills = kills + 1 end
-                if result == "no_weapon" or result == "died" then break end
+                if result == "no_weapon" or result == "died" or result == "retreat" then break end
             end
         end
         finishKill(origin)
@@ -1102,7 +1258,7 @@ track(UserInputService.InputEnded:Connect(function(i)
 end))
 
 -- Drag with tap detection. The frame must use AnchorPoint (0.5, 0.5)
-local function makeDraggable(frame, handle, onDown, onUp)
+local function makeDraggable(frame, handle, onDown, onUp, posKey)
     handle.InputBegan:Connect(function(i)
         if not isPointer(i) then return end
         local startInput = Vector2.new(i.Position.X, i.Position.Y)
@@ -1119,9 +1275,24 @@ local function makeDraggable(frame, handle, onDown, onUp)
                 frame.Position = UDim2.fromOffset(nx, ny)
             end
         end, function()
+            if moved and posKey and frame.Parent then
+                local vp = frame.Parent.AbsoluteSize
+                if vp.X > 0 and vp.Y > 0 then
+                    Settings.HudPos[posKey] = { frame.Position.X.Offset / vp.X, frame.Position.Y.Offset / vp.Y }
+                    saveDirty = true
+                end
+            end
             if onUp then onUp(not moved) end
         end)
     end)
+end
+
+-- put a dragged element back where the player left it last time
+local function applySavedPos(frame, key)
+    local p = Settings.HudPos[key]
+    if type(p) == "table" and type(p[1]) == "number" and type(p[2]) == "number" then
+        frame.Position = UDim2.new(p[1], 0, p[2], 0)
+    end
 end
 
 -- ============================================================
@@ -1159,6 +1330,7 @@ local function hidePieces(o)
     o.distLbl.Visible = false
     o.hpBg.Visible = false
     o.tracer.Visible = false
+    o.arrow.Visible = false
 end
 
 local function destroyESP(plr)
@@ -1169,6 +1341,7 @@ local function destroyESP(plr)
         o.distLbl:Destroy()
         o.hpBg:Destroy()
         o.tracer:Destroy()
+        o.arrow:Destroy()
         o.hl:Destroy()
         espObjects[plr] = nil
     end
@@ -1200,6 +1373,11 @@ local function createESP(plr)
     }, o.hpBg)
     o.tracer = create("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, Visible = false,
+    }, espGui)
+    o.arrow = create("TextLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(26, 26),
+        BackgroundTransparency = 1, Text = "▲", TextSize = 20, Font = Enum.Font.GothamBold,
+        TextStrokeTransparency = 0.3, TextColor3 = C.bad, Visible = false,
     }, espGui)
     o.hl = create("Highlight", {
         Name = plr.Name, FillTransparency = 0.75, OutlineTransparency = 0, Enabled = false,
@@ -1317,8 +1495,11 @@ function renderESP()
         if o.show and o.root.Parent and o.head.Parent and o.hum.Health > 0 then
             local top = cam:WorldToViewportPoint(o.head.Position + Vector3.new(0, o.head.Size.Y * 0.5 + 0.25, 0))
             local bot = cam:WorldToViewportPoint(o.root.Position - Vector3.new(0, 3, 0))
-            if top.Z > 0 and bot.Z > 0 then
+            local onScreen = top.Z > 0 and bot.Z > 0
+                and top.X > -40 and top.X < vs.X + 40 and top.Y > -60 and bot.Y < vs.Y + 60
+            if onScreen then
                 drawn = true
+                o.arrow.Visible = false
                 local h = math.max(bot.Y - top.Y, 8)
                 local w = h * 0.55
                 local cx = (top.X + bot.X) / 2
@@ -1363,7 +1544,30 @@ function renderESP()
                 end
             end
         end
-        if not drawn then hidePieces(o) end
+        if not drawn then
+            hidePieces(o)
+            -- enemy outside the screen: arrow pinned to the screen edge pointing at it
+            if Settings.ESPArrows and o.show and o.root.Parent and o.hum.Health > 0 then
+                local cf = cam.CFrame
+                local rel = o.root.Position - cf.Position
+                local fwd = cf.LookVector
+                local right = fwd:Cross(Vector3.new(0, 1, 0))
+                if right.Magnitude > 0.001 then
+                    right = right.Unit
+                    local up = right:Cross(fwd)
+                    local dx, dy = rel:Dot(right), rel:Dot(up)
+                    local len = math.sqrt(dx * dx + dy * dy)
+                    if len > 0.001 then
+                        dx, dy = dx / len, dy / len
+                        local ex, ey = vs.X * 0.5 - 40, vs.Y * 0.5 - 40
+                        o.arrow.Position = UDim2.fromOffset(vs.X * 0.5 + dx * ex, vs.Y * 0.5 - dy * ey)
+                        o.arrow.Rotation = math.deg(math.atan2(dx, dy))
+                        o.arrow.TextColor3 = o.color
+                        o.arrow.Visible = true
+                    end
+                end
+            end
+        end
     end
 end
 
@@ -1413,7 +1617,7 @@ local header = create("Frame", {
 
 local titleLbl = create("TextLabel", {
     Size = UDim2.new(1, -100, 1, 0), Position = UDim2.new(0, 14, 0, 0),
-    BackgroundTransparency = 1, Text = "Pro Aimbot v5", TextSize = 16,
+    BackgroundTransparency = 1, Text = "Pro Aimbot v6", TextSize = 16,
     Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
 }, header)
 bindColor(titleLbl, "TextColor3", "accent")
@@ -1432,7 +1636,8 @@ local clsBtn = create("TextButton", {
 }, header)
 round(clsBtn, 8)
 
-makeDraggable(main, header)
+makeDraggable(main, header, nil, nil, "main")
+applySavedPos(main, "main")
 
 local tabsBar = create("Frame", {
     Size = UDim2.new(0, 88, 1, -72), Position = UDim2.new(0, 8, 0, 46),
@@ -1470,8 +1675,8 @@ statusLabel = create("TextLabel", {
 -- ============================================================
 -- Tabs / pages / sections
 -- ============================================================
-local refreshPlayers
-do
+local refreshPlayers, resetHudLayout
+;(function()
 local tabButtons, tabPages = {}, {}
 local currentTab = "Main"
 
@@ -1797,6 +2002,7 @@ local function applyPreset(name)
 end
 
 -- ===== Main tab =====
+do
 local sPreset = createSection(pMain, "Quick presets", true)
 createButtonRow(sPreset, {
     { "Legit", Color3.fromRGB(0, 120, 160), function() applyPreset("Legit") end },
@@ -1804,6 +2010,8 @@ createButtonRow(sPreset, {
     { "Rage", Color3.fromRGB(170, 55, 55), function() applyPreset("Rage") end },
 })
 
+end
+do
 local sAssist = createSection(pMain, "Assist", true)
 createToggle(sAssist, "Enable Aimbot", "Enabled")
 createToggle(sAssist, "Auto Aim (off = hold AIM button)", "AutoAim")
@@ -1812,21 +2020,34 @@ createToggle(sAssist, "Sticky Lock", "Sticky")
 createToggle(sAssist, "Yield to manual camera input", "YieldToInput")
 createToggle(sAssist, "Trigger Bot (fires on crosshair)", "TriggerBot")
 createToggle(sAssist, "Tap a player to lock on", "TapToLock")
+createToggle(sAssist, "Always aim at the nearest enemy (360°)", "NearestLock")
+createToggle(sAssist, "Skip shielded (spawn-protected) targets", "SkipShielded")
+createToggle(sAssist, "Snap fast when a target is acquired", "SnapOnAcquire")
+createToggle(sAssist, "Hit feedback (marker pulse)", "HitFeedback")
 
+end
+do
 local sFilters = createSection(pMain, "Filters", false)
 createToggle(sFilters, "Wall Check", "WallCheck")
 createToggle(sFilters, "Team Check", "TeamCheck")
 createToggle(sFilters, "Ignore Friends", "IgnoreFriends")
 createToggle(sFilters, "Smart Bone (best visible part)", "SmartBone")
 
+end
 -- ===== Aim tab =====
+do
 local sTarget = createSection(pAim, "Targeting", true)
 createCycle(sTarget, "Target Mode", "TargetMode", TARGET_MODES)
+createCycle(sTarget, "Target scope", "TargetScope", TARGET_SCOPES)
 createCycle(sTarget, "Aim Bone", "TargetPart", BONES)
 createSlider(sTarget, "FOV Range", 30, 400, "FOV", 0)
 createSlider(sTarget, "Max Distance", 50, 2000, "MaxDistance", 0)
 createSlider(sTarget, "Aim torso beyond (studs, 0 = off)", 0, 1000, "AutoBoneDistance", 0)
+createSlider(sTarget, "Switch delay (s)", 0, 2, "SwitchDelay", 2)
+createSlider(sTarget, "Lock memory when hidden (s)", 0, 2, "LockMemory", 2)
 
+end
+do
 local sFeel = createSection(pAim, "Aim feel", true)
 createSlider(sFeel, "Smoothness", 0, 1, "Smoothness", 2)
 createSlider(sFeel, "Pull Strength", 0, 1, "Strength", 2)
@@ -1834,8 +2055,11 @@ createSlider(sFeel, "Deadzone (degrees)", 0, 3, "Deadzone", 2)
 createToggle(sFeel, "Adaptive smoothing (soft near target)", "AdaptiveSmooth")
 createSlider(sFeel, "Pull while you steer (0 = yield)", 0, 1, "YieldAmount", 2)
 
+end
+do
 local sPred = createSection(pAim, "Prediction", false)
 createToggle(sPred, "Motion Prediction", "Prediction")
+createCycle(sPred, "Prediction model", "PredModel", { "Adaptive", "Linear" })
 createSlider(sPred, "Prediction Amount", 0, 3, "PredAmount", 2)
 createSlider(sPred, "Bullet Speed (0 = instant)", 0, 3000, "BulletSpeed", 0)
 createSlider(sPred, "Ping Compensation", 0, 1, "PingComp", 2)
@@ -1848,11 +2072,15 @@ createButtonRow(sPred, {
     { "Delete weapon", Color3.fromRGB(150, 70, 50), deleteWeaponProfile },
 })
 
+end
+do
 local sFire = createSection(pAim, "Auto fire", false)
 createSlider(sFire, "Fire Delay (s)", 0.03, 0.5, "FireDelay", 2)
 createSlider(sFire, "Trigger Radius (px)", 5, 80, "TriggerRadius", 0)
 
+end
 -- ===== Visual tab =====
+do
 local sESP = createSection(pVisual, "ESP", true)
 createToggle(sESP, "ESP", "ESP")
 createToggle(sESP, "Boxes", "ESPBoxes")
@@ -1864,6 +2092,7 @@ createToggle(sESP, "Show teammates", "ESPTeam")
 createToggle(sESP, "Weapon names", "ESPWeapon")
 createToggle(sESP, "Only visible enemies", "ESPVisibleOnly")
 createSlider(sESP, "Max players drawn", 4, 40, "ESPMax", 0)
+createToggle(sESP, "Off-screen arrows", "ESPArrows")
 create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
     Text = "Green = visible, red = behind a wall, accent color = teammate",
@@ -1871,6 +2100,8 @@ create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left,
 }, sESP)
 
+end
+do
 local sHud = createSection(pVisual, "On-screen", true)
 createToggle(sHud, "FOV Circle", "ShowFOV")
 createToggle(sHud, "Aim point marker", "ShowMarker")
@@ -1883,7 +2114,10 @@ createToggle(sHud, "Radar", "Radar")
 createSlider(sHud, "Radar range (studs)", 50, 500, "RadarRange", 0)
 createSlider(sHud, "Radar size", 90, 220, "RadarSize", 0)
 createToggle(sHud, "Diagnostics overlay", "Diagnostics")
+createToggle(sHud, "Threat alert (enemy behind you)", "ThreatAlert")
+createSlider(sHud, "Alert range (studs)", 10, 150, "AlertRange", 0)
 
+end
 -- ===== Players tab =====
 local plHint = create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
@@ -1985,24 +2219,45 @@ end)
 -- ===== Kill tab =====
 createButton(pKill, "Kill All Players", Color3.fromRGB(200, 45, 45), startKillAll)
 createButton(pKill, "Stop Kill", Color3.fromRGB(95, 95, 105), stopKilling)
+do
 local sOrbit = createSection(pKill, "Orbit", true)
 createCycle(sOrbit, "Pattern", "KillPattern", { "Orbit", "Above", "Behind" })
 createCycle(sOrbit, "Kill All order", "KillOrder", { "Nearest", "Lowest HP", "Default" })
+createSlider(sOrbit, "Retreat below HP % (0 = off)", 0, 90, "KillSafeHP", 0)
 createSlider(sOrbit, "Orbit Radius", 3, 20, "KillRadius", 0)
 createSlider(sOrbit, "Orbit Height", 2, 15, "KillHeight", 0)
 createSlider(sOrbit, "Orbit Speed (deg/s)", 100, 720, "KillSpeed", 0)
 
+end
+do
+local sWay = createSection(pKill, "Waypoints", false)
+createCycle(sWay, "Slot", "WaypointSlot", { "1", "2", "3", "4", "5" })
+createButtonRow(sWay, {
+    { "Save here", Color3.fromRGB(0, 120, 90), saveWaypoint },
+    { "Go to slot", Color3.fromRGB(60, 90, 170), gotoWaypoint },
+})
+
+end
 -- ===== Misc tab =====
+do
 local sPerf = createSection(pMisc, "Performance", true)
 createToggle(sPerf, "Performance Mode", "PerfMode")
 createToggle(sPerf, "Auto performance (low FPS)", "AutoPerf")
 
+end
+do
 local sUI = createSection(pMisc, "Interface", true)
 createCycle(sUI, "Theme", "Theme", THEME_NAMES)
 createSlider(sUI, "Menu Size", 0.5, 1, "UIScale", 2)
 createToggle(sUI, "Left-handed layout", "LeftHanded")
 createSlider(sUI, "AIM button size", 50, 120, "AimButtonSize", 0)
+createToggle(sUI, "PC hotkeys (X aim · Z nearest · C ESP · V next)", "Hotkeys")
+createButton(sUI, "Reset HUD layout", Color3.fromRGB(120, 90, 30), function()
+    if resetHudLayout then resetHudLayout() end
+end)
 
+end
+do
 local sCfg = createSection(pMisc, "Config", true)
 createButton(sCfg, "Save Config", Color3.fromRGB(0, 120, 90), function()
     if saveConfig() then
@@ -2032,6 +2287,7 @@ createButton(sCfg, "Unload Script", Color3.fromRGB(170, 50, 50), function()
     if cleanup then cleanup() end
 end)
 
+end
 -- Profiles: three full-settings slots
 local function snapshotSettings()
     local snap = {}
@@ -2065,6 +2321,7 @@ local function loadProfile()
     toast("Loaded slot " .. Settings.ProfileSlot, C.good, 2)
 end
 
+do
 local sProfiles = createSection(pMisc, "Profiles", false)
 createCycle(sProfiles, "Slot", "ProfileSlot", { "1", "2", "3" })
 createButtonRow(sProfiles, {
@@ -2072,13 +2329,41 @@ createButtonRow(sProfiles, {
     { "Load slot", Color3.fromRGB(60, 90, 170), loadProfile },
 })
 
+end
+do
 local sSession = createSection(pMisc, "Session", false)
 sessionInfoLabel = createInfo(sSession, "")
 
+end
+-- Event log: everything that happened, newest at the bottom (great for bug reports)
+do
+local sLog = createSection(pMisc, "Event log", false)
+logInfoLabel = create("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 130), BackgroundColor3 = C.head, BorderSizePixel = 0,
+    Text = "", TextColor3 = C.idle, TextSize = 10, Font = Enum.Font.Code, TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, sLog)
+round(logInfoLabel, 8)
+create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 6) }, logInfoLabel)
+createButtonRow(sLog, {
+    { "Copy log", Color3.fromRGB(60, 90, 170), function()
+        local ok = false
+        if setclipboard then
+            ok = pcall(function() setclipboard(table.concat(eventLog, "\n")) end)
+        end
+        toast(ok and "Log copied" or "Clipboard not supported here", ok and C.good or C.warn, 2)
+    end },
+    { "Clear log", Color3.fromRGB(150, 70, 50), function()
+        eventLog = {}
+        toast("Log cleared", C.idle, 1.5)
+    end },
+})
+
+end
 switchTab("Main")
 applyTheme(Settings.Theme)
 
-end -- menu content
+end)() -- menu content
 
 -- Minimize / close
 local minimized = false
@@ -2098,8 +2383,8 @@ end)
 -- ============================================================
 -- HUD: menu button, status pill, stats, toast, quick buttons, AIM, marker
 -- ============================================================
-local marker, aimBtn, updateRadar
-do
+local marker, aimBtn, updateRadar, updateThreat
+;(function()
 local fab = create("TextButton", {
     Name = "MenuButton", AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.new(0.06, 0, 0.3, 0), Size = UDim2.fromOffset(46, 46),
@@ -2110,7 +2395,7 @@ circle(fab)
 outline(fab, "accent", 2, 0.2)
 makeDraggable(fab, fab, nil, function(tap)
     if tap then main.Visible = not main.Visible end
-end)
+end, "fab")
 
 pillLabel = create("TextLabel", {
     Name = "Pill", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
@@ -2171,7 +2456,7 @@ local grip = create("TextButton", {
     Text = "• • •", TextColor3 = C.idle, TextSize = 12, Font = Enum.Font.GothamBold,
     AutoButtonColor = false,
 }, chipGroup)
-makeDraggable(chipGroup, grip)
+makeDraggable(chipGroup, grip, nil, nil, "chips")
 
 local function newChip(label, order)
     local btn = create("TextButton", {
@@ -2197,7 +2482,8 @@ createToggleChip("AIM", "Enabled", 1)
 createToggleChip("AUTO", "AutoAim", 2)
 createToggleChip("FIRE", "AutoFire", 3)
 createToggleChip("ESP", "ESP", 4)
-local nextChip = newChip("NEXT", 5)
+createToggleChip("NEAR", "NearestLock", 5)
+local nextChip = newChip("NEXT", 6)
 nextChip.MouseButton1Click:Connect(nextTarget)
 
 aimBtn = create("TextButton", {
@@ -2216,7 +2502,7 @@ makeDraggable(aimBtn, aimBtn, function()
 end, function()
     aimHeld = false
     aimBtn.BackgroundColor3 = C.bg
-end)
+end, "aim")
 
 -- PC: hold right mouse button to aim when Auto Aim is off
 track(UserInputService.InputBegan:Connect(function(i, processed)
@@ -2244,7 +2530,7 @@ local radarSelf = create("Frame", {
     Size = UDim2.fromOffset(6, 6), BackgroundColor3 = C.white, BorderSizePixel = 0,
 }, radarFrame)
 circle(radarSelf)
-makeDraggable(radarFrame, radarFrame)
+makeDraggable(radarFrame, radarFrame, nil, nil, "radar")
 onChange("Radar", function(v) radarFrame.Visible = v end)
 onChange("RadarSize", function(v) radarFrame.Size = UDim2.fromOffset(v, v) end)
 
@@ -2366,7 +2652,7 @@ onChange("CrosshairStyle", refreshCrosshair)
 -- ----- Diagnostics overlay (live tracker / timing numbers)
 diagLabel = create("TextLabel", {
     Name = "Diagnostics", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -6),
-    Size = UDim2.fromOffset(440, 56), BackgroundColor3 = C.bg, BackgroundTransparency = 0.35,
+    Size = UDim2.fromOffset(560, 56), BackgroundColor3 = C.bg, BackgroundTransparency = 0.35,
     BorderSizePixel = 0, Text = "", TextColor3 = C.text, TextSize = 11, Font = Enum.Font.Code,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
     Visible = Settings.Diagnostics,
@@ -2374,6 +2660,48 @@ diagLabel = create("TextLabel", {
 round(diagLabel, 6)
 create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 4) }, diagLabel)
 onChange("Diagnostics", function(v) diagLabel.Visible = v end)
+
+-- ----- Threat alert: red screen border + toast when an enemy is close behind you
+local threatFrame = create("Frame", {
+    Name = "Threat", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+    BorderSizePixel = 0, Visible = false,
+}, hudGui)
+create("UIStroke", { Color = C.bad, Thickness = 6, Transparency = 0.25 }, threatFrame)
+local lastThreatCheck, lastThreatToast = 0, 0
+
+function updateThreat(now)
+    if not Settings.ThreatAlert then
+        if threatFrame.Visible then threatFrame.Visible = false end
+        return
+    end
+    if now - lastThreatCheck < 0.2 then return end
+    lastThreatCheck = now
+
+    local cam = camera()
+    local myRoot = getRoot(LocalPlayer.Character)
+    if not cam or not myRoot then return end
+    local look = cam.CFrame.LookVector
+    local nearest, nearestDist = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and isValidTarget(plr) then
+            local root = getRoot(plr.Character)
+            if root then
+                local rel = root.Position - myRoot.Position
+                local d = rel.Magnitude
+                if d <= Settings.AlertRange and d < nearestDist and rel:Dot(look) < 0 then
+                    nearest, nearestDist = plr, d
+                end
+            end
+        end
+    end
+
+    local on = nearest ~= nil
+    if threatFrame.Visible ~= on then threatFrame.Visible = on end
+    if on and now - lastThreatToast > 2.5 then
+        lastThreatToast = now
+        toast(string.format("⚠ %s behind you · %dm", nearest.DisplayName, math.floor(nearestDist)), C.bad, 1.6)
+    end
+end
 
 -- ----- Layout: left-handed mirror + AIM button size
 local function applyHandedness(left)
@@ -2384,7 +2712,22 @@ local function applyHandedness(left)
     radarFrame.Position = UDim2.new(x(0.2), 0, 0.24, 0)
 end
 applyHandedness(Settings.LeftHanded)
-onChange("LeftHanded", applyHandedness)
+for key, fr in pairs({ fab = fab, chips = chipGroup, aim = aimBtn, radar = radarFrame }) do
+    applySavedPos(fr, key)
+end
+onChange("LeftHanded", function(v)
+    -- a mirrored layout starts from the default positions
+    for _, key in ipairs({ "fab", "chips", "aim", "radar" }) do Settings.HudPos[key] = nil end
+    applyHandedness(v)
+end)
+
+function resetHudLayout()
+    Settings.HudPos = {}
+    saveDirty = true
+    applyHandedness(Settings.LeftHanded)
+    main.Position = UDim2.new(0.5, 0, 0.5, 0)
+    toast("HUD layout reset", C.good, 2)
+end
 
 aimBtn.Size = UDim2.fromOffset(Settings.AimButtonSize, Settings.AimButtonSize)
 onChange("AimButtonSize", function(v) aimBtn.Size = UDim2.fromOffset(v, v) end)
@@ -2421,20 +2764,31 @@ end))
 
 -- PC: RightShift toggles the menu
 track(UserInputService.InputBegan:Connect(function(i, processed)
-    if i.KeyCode == Enum.KeyCode.RightShift and not processed then
+    if processed then return end
+    if i.KeyCode == Enum.KeyCode.RightShift then
         main.Visible = not main.Visible
+    elseif Settings.Hotkeys then
+        if i.KeyCode == Enum.KeyCode.X then
+            setSetting("Enabled", not Settings.Enabled)
+        elseif i.KeyCode == Enum.KeyCode.Z then
+            setSetting("NearestLock", not Settings.NearestLock)
+        elseif i.KeyCode == Enum.KeyCode.C then
+            setSetting("ESP", not Settings.ESP)
+        elseif i.KeyCode == Enum.KeyCode.V then
+            nextTarget()
+        end
     end
 end))
 
 onChange("Sticky", function(v)
     if not v then setTarget(nil, nil) end
 end)
-end -- hud
+end)() -- hud
 
 -- ============================================================
 -- Main loop (bound right AFTER the camera script so our aim sticks)
 -- ============================================================
-do
+;(function()
 local lastSelect, lastESP, lastInfo, lastStats, lastDiag = 0, 0, 0, 0, 0
 local fovLocked = false
 local lastFov = Settings.FOV
@@ -2447,6 +2801,7 @@ local function frameStep(dt, now, perf)
         fovFrame.Size = UDim2.fromOffset(Settings.FOV * 2, Settings.FOV * 2)
     end
     local showFov = Settings.ShowFOV and Settings.Enabled
+        and not (Settings.NearestLock or Settings.TargetScope == "Global")
     if fovFrame.Visible ~= showFov then fovFrame.Visible = showFov end
     local locked = CurrentPart ~= nil and Settings.Enabled and not isKilling
     if locked ~= fovLocked then
@@ -2466,6 +2821,7 @@ local function frameStep(dt, now, perf)
     end
     renderESP()
     updateRadar(now, perf)
+    updateThreat(now)
     updateWeaponProfile(now)
     if not isKilling then runTriggerBot(now) end
 
@@ -2520,14 +2876,35 @@ local function frameStep(dt, now, perf)
 
         local aimPos = getAimPosition(CurrentPart, offset, drop)
         local base = (1 - Settings.Smoothness) * Settings.Strength
+        if Settings.SnapOnAcquire and now < acquireBoostUntil then
+            base = math.min(1, base * 2.5 + 0.3)
+        end
         aimCamera(aimPos, base, dt, now, true)
-        tryAutoFire(now, aimPos)
+        if not lockHidden then tryAutoFire(now, aimPos) end
+
+        -- hit feedback: health lost by the locked target right after one of our shots
+        if hum then
+            if hitTrack.target ~= CurrentTarget then
+                hitTrack.target, hitTrack.hp = CurrentTarget, hum.Health
+            else
+                if hum.Health < hitTrack.hp - 0.5 and now - lastShot < 0.8 then
+                    stats.hits = stats.hits + 1
+                    stats.damage = stats.damage + (hitTrack.hp - hum.Health)
+                    if Settings.HitFeedback then hitFlashUntil = now + 0.18 end
+                end
+                hitTrack.hp = hum.Health
+            end
+        end
 
         if Settings.ShowMarker then
             local cam = camera()
             local v, onScreen = cam:WorldToViewportPoint(aimPos)
             marker.Visible = onScreen and v.Z > 0
-            if marker.Visible then marker.Position = UDim2.fromOffset(v.X, v.Y) end
+            if marker.Visible then
+                marker.Position = UDim2.fromOffset(v.X, v.Y)
+                local pulse = now < hitFlashUntil
+                marker.Size = pulse and UDim2.fromOffset(28, 28) or UDim2.fromOffset(14, 14)
+            end
         else
             marker.Visible = false
         end
@@ -2561,9 +2938,9 @@ local function onRender(dt)
     fpsEMA = fpsEMA + (1 / math.max(dt, 0.001) - fpsEMA) * 0.05
     if now - lastStats >= 0.5 then
         lastStats = now
-        if fpsEMA < 26 then
+        if fpsEMA < 26 or frameMs > 6 then
             autoPerfOn = Settings.AutoPerf
-        elseif fpsEMA > 42 then
+        elseif fpsEMA > 42 and frameMs < 3 then
             autoPerfOn = false
         end
         if Settings.ShowStats and statsLabel then
@@ -2577,9 +2954,18 @@ local function onRender(dt)
                 .. (saved and "  (profile saved)" or "")
         end
         if sessionInfoLabel then
+            local acc = 0
+            if stats.shots > 0 then
+                acc = math.min(100, math.floor(stats.hits / stats.shots * 100 + 0.5))
+            end
             sessionInfoLabel.Text = string.format(
-                "%d locks · %d locked kills · %d errors · %d min online",
-                stats.locks, stats.kills, stats.errors, math.floor((now - stats.start) / 60))
+                "%d locks · %d locked kills · %d hits / %d shots (%d%%) · %d dmg · %d errors · %d min",
+                stats.locks, stats.kills, stats.hits, stats.shots, acc,
+                math.floor(stats.damage), stats.errors, math.floor((now - stats.start) / 60))
+        end
+        if logInfoLabel then
+            local from = math.max(1, #eventLog - 8)
+            logInfoLabel.Text = table.concat(eventLog, "\n", from, #eventLog)
         end
     end
 
@@ -2587,16 +2973,19 @@ local function onRender(dt)
         lastDiag = now
         local T = aimTracker
         diagLabel.Text = string.format(
-            "tgt %s  spd %.1f  acc %.1f  man %.2f  rel %.2f\nlead %.3fs  drop %.2f  sel %.2fms  fps %d  ping %dms\nlocks %d  kills %d  errors %d",
+            "tgt %s  spd %.1f  acc %.1f  man %.2f  rel %.2f\nlead %.3fs  drop %.2f  sel %.2fms  fps %d  ping %dms\nlocks %d  kills %d  hits %d  dmg %d  shots %d  errors %d  frame %.2fms",
             CurrentTarget and CurrentTarget.Name or "-",
             T.vel.Magnitude, T.acc.Magnitude, T.man, T.rel,
             diag.lead, diag.drop, diag.selMs,
             math.floor(fpsEMA + 0.5), math.floor(getPing() * 1000),
-            stats.locks, stats.kills, stats.errors)
+            stats.locks, stats.kills, stats.hits, math.floor(stats.damage), stats.shots,
+            stats.errors, frameMs)
     end
 
     -- A bug in one frame must never kill the whole script
+    local t0 = os.clock()
     local ok, err = pcall(frameStep, dt, now, perfActive())
+    frameMs = frameMs + ((os.clock() - t0) * 1000 - frameMs) * 0.05
     if not ok then stats.errors = stats.errors + 1 end
     if not ok and now - lastErr > 3 then
         lastErr = now
@@ -2617,7 +3006,7 @@ task.spawn(function()
     end
 end)
 
-end -- main loop
+end)() -- main loop
 
 -- ============================================================
 -- Cleanup (Unload button / re-execute)
@@ -2633,6 +3022,7 @@ cleanup = function()
     endHazardBypass()
     if saveDirty then saveConfig() end
     pcall(destroyAllESP)
+    if weaponConn then pcall(function() weaponConn:Disconnect() end) end
     pcall(function() uiLayer:Destroy() end)
     pcall(function() hudGui:Destroy() end)
     pcall(function() espGui:Destroy() end)
